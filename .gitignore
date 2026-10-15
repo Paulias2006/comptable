@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+db.sqlite3
+/private_media/
+/staticfiles/
+/backups/
+/.agents/
+/skills-lock.json

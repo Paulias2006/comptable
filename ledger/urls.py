@@ -1,0 +1,32 @@
+from django.urls import path
+
+from ledger import views
+urlpatterns = [
+    path("", views.dashboard, name="dashboard"),
+    path("premiere-installation/", views.setup, name="setup"),
+    path("connexion/", views.login_view, name="login"),
+    path("deconnexion/", views.logout_view, name="logout"),
+    path("entreprise/changer/", views.switch_company, name="switch_company"),
+    path("entreprise/ajouter/", views.add_company, name="add_company"),
+    path("mot-de-passe/", views.password_change, name="password_change"),
+    path("ecritures/", views.journal, name="journal"),
+    path("a-valider/", views.approvals, name="approvals"),
+    path("ecritures/nouvelle/", views.entry_new, name="entry_new"),
+    path("ecritures/<int:pk>/", views.entry_detail, name="entry_detail"),
+    path("ecritures/<int:pk>/contrepasser/", views.entry_reverse, name="entry_reverse"),
+    path("ecritures/<int:pk>/valider/", views.entry_approve, name="entry_approve"),
+    path("ecritures/<int:pk>/rejeter/", views.entry_reject, name="entry_reject"),
+    path("pieces/", views.documents, name="documents"),
+    path("pieces/manquantes/", views.missing_documents, name="missing_documents"),
+    path("pieces/<int:pk>/voir/", views.document_preview, name="document_preview"),
+    path("pieces/<int:pk>/telecharger/", views.document_download, name="document_download"),
+    path("ecritures/<int:pk>/piece/ajouter/", views.document_add, name="document_add"),
+    path("plan-comptable/", views.accounts, name="accounts"),
+    path("rapports/", views.reports, name="reports"),
+    path("utilisateurs/", views.members, name="members"),
+    path("entreprise/", views.company_settings, name="company_settings"),
+    path("entreprise/exercices/", views.fiscal_period_action, name="fiscal_period_action"),
+    path("audit/", views.audit_log, name="audit_log"),
+    path("exports/", views.export, name="export"),
+    path("sauvegarde/", views.backup, name="backup"),
+]

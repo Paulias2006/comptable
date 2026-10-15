@@ -1,0 +1,54 @@
+{% extends 'ledger/base.html' %}
+{% block title %}Plan comptable{% endblock %}
+{% block heading %}Plan comptable{% endblock %}
+{% block subtitle %}SYSCOHADA révisé · {{ accounts.paginator.count }} compte(s) dans le plan de {{ current_company.name }}.{% endblock %}
+{% block content %}
+<section class="grid two-col">
+  <article class="card">
+    <form method="get" class="filters">
+      <div class="field search">
+        <label for="account-query">Rechercher un compte</label>
+        <input id="account-query" class="search-input" name="q" value="{{ q }}" placeholder="Numéro ou intitulé">
+      </div>
+      <button class="button">Rechercher</button>
+      {% if q %}<a class="button" href="{% url 'accounts' %}">Effacer</a>{% endif %}
+    </form>
+    <p class="field-help">Page {{ accounts.number }} sur {{ accounts.paginator.num_pages }} · Affichage de 50 comptes par page.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>N° du compte</th><th>Intitulé</th><th>État</th></tr></thead>
+        <tbody>
+          {% for account in accounts %}
+          <tr><td><b>{{ account.code }}</b></td><td>{{ account.name }}</td><td><span class="badge">Actif</span></td></tr>
+          {% empty %}
+          <tr><td colspan="3" class="empty">Aucun compte correspondant.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if accounts.has_other_pages %}
+    <nav class="actions" aria-label="Pagination du plan comptable" style="margin-top:16px">
+      {% if accounts.has_previous %}<a class="button" href="?q={{ q|urlencode }}&page={{ accounts.previous_page_number }}">← Précédent</a>{% endif %}
+      {% if accounts.has_next %}<a class="button" href="?q={{ q|urlencode }}&page={{ accounts.next_page_number }}">Suivant →</a>{% endif %}
+    </nav>
+    {% endif %}
+  </article>
+  {% if current_membership.role == 'OWNER' %}
+  <aside class="card">
+    <h2>Ajouter un compte personnalisé</h2>
+    <p class="page-subtitle">Le plan SYSCOHADA reste disponible. Les comptes déjà utilisés sont conservés dans l’historique.</p>
+    <form method="post">
+      {% csrf_token %}
+      {% for field in form %}
+      <div class="field" style="margin-top:13px">
+        <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+        {{ field }}
+        {% for error in field.errors %}<small class="form-errors">{{ error }}</small>{% endfor %}
+      </div>
+      {% endfor %}
+      <button class="button button-primary" style="margin-top:15px">Ajouter le compte</button>
+    </form>
+  </aside>
+  {% endif %}
+</section>
+{% endblock %}

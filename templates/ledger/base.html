@@ -1,0 +1,31 @@
+{% load static %}<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#145c48"><link rel="icon" href="{% static 'favicon.svg' %}" type="image/svg+xml"><link rel="manifest" href="{% static 'manifest.webmanifest' %}"><link rel="stylesheet" href="{% static 'css/app.css' %}"><title>{% block title %}ComptaPièces{% endblock %} · ComptaPièces</title></head>
+<body><div class="app-shell">
+<aside class="sidebar">
+ <a class="brand" href="{% url 'dashboard' %}"><span class="brand-mark">C</span>ComptaPièces</a>
+ {% if user_companies|length > 1 %}<form method="post" action="{% url 'switch_company' %}" class="field" style="padding:0 7px">{% csrf_token %}<label style="color:#a7c3b6">Entreprise active</label><select name="company_id" onchange="this.form.submit()" style="background:#183b30;color:white;border:1px solid #ffffff24">{% for item in user_companies %}<option value="{{ item.company_id }}" {% if item.company_id == current_company.pk %}selected{% endif %}>{{ item.company.name }}</option>{% endfor %}</select></form>{% endif %}
+ <nav class="nav-list" aria-label="Navigation principale">
+  <div class="nav-label">Espace de travail</div>
+  <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}"><span class="nav-icon">⌂</span>Tableau de bord</a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'entry_new' %}active{% endif %}" href="{% url 'entry_new' %}"><span class="nav-icon">＋</span>Nouvelle écriture</a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'journal' or request.resolver_match.url_name == 'entry_detail' %}active{% endif %}" href="{% url 'journal' %}"><span class="nav-icon">▤</span>Journal</a>
+  {% if current_membership.role == 'OWNER' or current_membership.role == 'MANAGER' %}<a class="nav-link {% if request.resolver_match.url_name == 'approvals' %}active{% endif %}" href="{% url 'approvals' %}"><span class="nav-icon">✓</span>À valider {% if pending_entries_count %}<span class="badge badge-warn">{{ pending_entries_count }}</span>{% endif %}</a>{% endif %}
+  <a class="nav-link {% if request.resolver_match.url_name == 'documents' %}active{% endif %}" href="{% url 'documents' %}"><span class="nav-icon">▧</span>Pièces justificatives</a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'missing_documents' %}active{% endif %}" href="{% url 'missing_documents' %}"><span class="nav-icon">◷</span>Pièces manquantes</a>
+  <div class="nav-label">Comptabilité</div>
+  <a class="nav-link {% if request.resolver_match.url_name == 'accounts' %}active{% endif %}" href="{% url 'accounts' %}"><span class="nav-icon">▦</span>Plan comptable</a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'reports' %}active{% endif %}" href="{% url 'reports' %}"><span class="nav-icon">▥</span>Balance des comptes</a>
+  <a class="nav-link {% if request.resolver_match.url_name == 'export' %}active{% endif %}" href="{% url 'export' %}"><span class="nav-icon">⇩</span>Exports et sauvegardes</a>
+  <div class="nav-label">Administration</div>
+  {% if current_membership.role == 'OWNER' %}<a class="nav-link {% if request.resolver_match.url_name == 'members' %}active{% endif %}" href="{% url 'members' %}"><span class="nav-icon">♙</span>Utilisateurs</a><a class="nav-link {% if request.resolver_match.url_name == 'company_settings' %}active{% endif %}" href="{% url 'company_settings' %}"><span class="nav-icon">⚙</span>Fiche entreprise</a>{% endif %}
+  <a class="nav-link {% if request.resolver_match.url_name == 'audit_log' %}active{% endif %}" href="{% url 'audit_log' %}"><span class="nav-icon">◉</span>Historique d’audit</a>
+ </nav>
+ <div class="side-bottom"><div class="side-user"><span class="avatar">{{ request.user.first_name|default:request.user.username|slice:':1'|upper }}</span><span class="user-detail"><b>{{ request.user.get_full_name|default:request.user.username }}</b><small>{{ current_membership.get_role_display }} · {{ current_company.name }}</small></span><a class="logout" href="{% url 'password_change' %}" title="Changer le mot de passe">⚿</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="logout" title="Déconnexion" aria-label="Déconnexion">↪</button></form></div></div>
+</aside>
+<main class="main-wrap">
+ <header class="topbar"><div class="topbar-left"><button class="button menu-toggle" data-menu-toggle aria-label="Ouvrir le menu">☰</button><div><div class="crumb">{{ current_company.name }} · {{ current_company.country }}</div><h1>{% block heading %}Tableau de bord{% endblock %}</h1><p class="page-subtitle">{% block subtitle %}Votre comptabilité, claire et maîtrisée.{% endblock %}</p></div></div><div class="top-actions"><span class="status-pill"><i class="status-dot"></i> Base locale sécurisée</span>{% block top_action %}{% endblock %}</div></header>
+ {% if messages %}<div class="messages">{% for message in messages %}<div class="alert {% if message.tags == 'success' %}alert-success{% elif message.tags == 'error' %}alert-error{% elif message.tags == 'warning' %}alert-warning{% else %}alert-info{% endif %}" data-dismiss>{{ message }}</div>{% endfor %}</div>{% endif %}
+ {% block content %}{% endblock %}
+</main></div>
+<nav class="mobile-nav"><a href="{% url 'dashboard' %}"><b>⌂</b>Accueil</a><a href="{% url 'entry_new' %}"><b>＋</b>Saisie</a><a href="{% url 'journal' %}"><b>▤</b>Journal</a><a href="{% url 'documents' %}"><b>▧</b>Pièces</a></nav>
+<div class="modal-loader" aria-live="polite"><div class="loader-box"><div class="spinner"></div>Ouverture de votre espace…</div></div><script src="{% static 'js/app.js' %}" defer></script>{% block scripts %}{% endblock %}</body></html>

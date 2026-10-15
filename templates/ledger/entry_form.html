@@ -1,0 +1,102 @@
+{% extends 'ledger/base.html' %}
+{% block title %}Nouvelle écriture{% endblock %}
+{% block heading %}Nouvelle écriture{% endblock %}
+{% block subtitle %}Saisie en partie double : validation possible uniquement si total débit = total crédit.{% endblock %}
+{% block content %}
+<form method="post" enctype="multipart/form-data" id="entry-form">
+  {% csrf_token %}
+  <datalist id="account-options">
+    {% for a in accounts %}<option value="{{ a.code }} · {{ a.name }}" data-id="{{ a.id }}"></option>{% endfor %}
+  </datalist>
+  <section class="grid two-col">
+    <article class="card">
+      <div class="form-grid">
+        <div class="field"><label for="date">Date comptable</label><input id="date" name="date" type="date" value="{{ today }}" required></div>
+        <div class="field"><label for="journal">Journal</label><select id="journal" name="journal"><option value="ACH">Achats</option><option value="VEN">Ventes</option><option value="BNQ">Banque</option><option value="CAI">Caisse</option><option value="OD">Opérations diverses</option></select></div>
+        <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture</label><input id="description" name="description" maxlength="240" required placeholder="Ex. Facture fournisseur du 15/10/2026"></div>
+      </div>
+      <div class="line-editor">
+        <div class="card-head"><h2>Lignes comptables</h2><button class="button button-small" type="button" id="add-line">＋ Ajouter une ligne</button></div>
+        <p class="field-help">Le plan SYSCOHADA révisé complet est disponible. Recherche par numéro ou intitulé. Une écriture doit avoir au moins deux lignes équilibrées.</p>
+        <div class="table-wrap">
+          <table id="lines-table">
+            <thead><tr><th>Compte</th><th>Détail (facultatif)</th><th class="amount">Débit</th><th class="amount">Crédit</th><th></th></tr></thead>
+            <tbody id="lines"></tbody>
+            <tfoot><tr><td colspan="2">Totaux</td><td class="amount" id="debit-total">0,00</td><td class="amount" id="credit-total">0,00</td><td></td></tr><tr><td colspan="5" id="balance-state"><span class="badge badge-warn">Écriture non équilibrée</span></td></tr></tfoot>
+          </table>
+        </div>
+        <input type="hidden" name="lines_json" id="lines-json">
+      </div>
+      <div class="actions"><button type="submit" class="button button-primary" id="submit-entry" disabled>Enregistrer l’écriture</button><a class="button" href="{% url 'journal' %}">Annuler</a></div>
+    </article>
+    <aside class="grid">
+      <section class="card">
+        <div class="card-head"><h2>Pièces justificatives</h2><span class="badge badge-neutral">PDF ou image · 15 Mo max/fichier</span></div>
+        <label class="doc-drop" for="documents">Clique ici pour joindre les factures, reçus ou relevés.<br><small>Sur un appareil avec caméra, utilise l’option appareil photo.</small><br><input type="file" id="documents" name="documents" accept=".pdf,.png,.jpg,.jpeg,.webp,image/*" multiple capture="environment" style="margin-top:12px;max-width:100%"></label>
+        <div id="file-list" class="field-help" style="margin-top:10px"></div>
+        <p class="field-help" style="margin-top:12px">Les pièces sont conservées dans le stockage configuré pour l’application. Leur téléchargement passe par une vérification d’accès ; une empreinte SHA-256 permet de contrôler chaque fichier.</p>
+      </section>
+      <section class="card"><h2>Avant validation</h2><ul class="field-help" style="line-height:1.9;padding-left:18px"><li>Chaque ligne touche un compte de cette entreprise.</li><li>Une ligne a soit un débit soit un crédit.</li><li>Les totaux doivent être égaux au centime.</li><li>Une écriture validée est figée ; corrige-la par contrepassation.</li></ul></section>
+    </aside>
+  </section>
+</form>
+{% endblock %}
+{% block scripts %}
+<script>
+(()=>{
+  const body=document.getElementById('lines');
+  const add=document.getElementById('add-line');
+  const options=[...document.querySelectorAll('#account-options option')];
+  const byLabel=new Map(options.map(option=>[option.value,option]));
+  const byCode=new Map(options.map(option=>[option.value.split(' · ',1)[0],option]));
+  const amount=n=>Math.round((Number(n)||0)*100)/100;
+  function resolveAccount(input){
+    const value=input.value.trim();
+    const option=byLabel.get(value)||byCode.get(value);
+    const hidden=input.parentElement.querySelector('.account-id');
+    hidden.value=option?.dataset.id||'';
+    input.setCustomValidity(option?'':'Sélectionne un compte du plan comptable dans les suggestions.');
+    if(option&&byCode.has(value))input.value=option.value;
+  }
+  function syncRemoveButtons(){
+    const rows=[...body.children];
+    rows.forEach(row=>{const button=row.querySelector('.remove');button.disabled=rows.length<=2;button.title=button.disabled?'Deux lignes au minimum pour une écriture équilibrée':'Supprimer cette ligne'});
+  }
+  function val(input){return Number(input.value.replace(/\s/g,'').replace(',','.'))||0}
+  function calculate(){
+    let debit=0,credit=0,lines=[];
+    for(const row of body.children){
+      const d=amount(val(row.querySelector('.debit'))),c=amount(val(row.querySelector('.credit')));
+      debit+=d;credit+=c;
+      lines.push({account_id:row.querySelector('.account-id').value,description:row.querySelector('.line-description').value,debit:d.toFixed(2),credit:c.toFixed(2)});
+    }
+    document.getElementById('debit-total').textContent=debit.toLocaleString('fr-FR',{minimumFractionDigits:2});
+    document.getElementById('credit-total').textContent=credit.toLocaleString('fr-FR',{minimumFractionDigits:2});
+    const balanced=debit>0&&Math.round(debit*100)===Math.round(credit*100)&&lines.every(line=>Boolean(line.account_id)&&(Number(line.debit)>0)!==(Number(line.credit)>0));
+    document.getElementById('balance-state').innerHTML=balanced?'<span class="badge">Équilibrée · prête à comptabiliser</span>':'<span class="badge badge-warn">Écriture non équilibrée</span>';
+    document.getElementById('submit-entry').disabled=!balanced;
+    document.getElementById('lines-json').value=JSON.stringify(lines);
+  }
+  function row(){
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td><input class="account-search" list="account-options" autocomplete="off" placeholder="Numéro ou intitulé" aria-label="Rechercher un compte"><input type="hidden" class="account-id"></td><td><input class="line-description" maxlength="240" placeholder="Détail"></td><td><input class="debit" inputmode="decimal" placeholder="0,00"></td><td><input class="credit" inputmode="decimal" placeholder="0,00"></td><td><button type="button" class="button button-small remove" aria-label="Supprimer la ligne">×</button></td>';
+    body.appendChild(tr);
+    const accountInput=tr.querySelector('.account-search');
+    accountInput.addEventListener('input',()=>{resolveAccount(accountInput);calculate()});
+    accountInput.addEventListener('change',()=>{resolveAccount(accountInput);calculate()});
+    tr.querySelector('.line-description').addEventListener('input',calculate);
+    tr.querySelectorAll('.debit,.credit').forEach(input=>input.addEventListener('input',()=>{
+      const current=input.closest('tr');
+      if(input.classList.contains('debit')&&Number(input.value.replace(',','.'))>0)current.querySelector('.credit').value='';
+      if(input.classList.contains('credit')&&Number(input.value.replace(',','.'))>0)current.querySelector('.debit').value='';
+      calculate();
+    }));
+    tr.querySelector('.remove').onclick=()=>{if(body.children.length>2){tr.remove();syncRemoveButtons();calculate()}};
+    syncRemoveButtons();
+  }
+  add.addEventListener('click',row);
+  row();row();calculate();
+  document.getElementById('documents').addEventListener('change',event=>{document.getElementById('file-list').textContent=[...event.target.files].map(file=>`${file.name} · ${(file.size/1024/1024).toFixed(2)} Mo`).join(' · ')});
+})();
+</script>
+{% endblock %}
