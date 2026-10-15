@@ -2,7 +2,7 @@ from django import forms
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.models import User
 
-from ledger.models import Account, Company, Membership, ThirdParty
+from ledger.models import Account, Company, Membership
 
 class LoginForm(AuthenticationForm):
     username = forms.CharField(label="E-mail ou identifiant", widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "Votre e-mail ou identifiant"}))
@@ -43,13 +43,6 @@ class AccountForm(forms.ModelForm):
         model = Account
         fields = ("code", "name")
         labels = {"code": "Numéro du compte", "name": "Intitulé"}
-
-class ThirdPartyForm(forms.ModelForm):
-    class Meta:
-        model = ThirdParty
-        fields = ("kind", "name")
-        labels = {"kind": "Type", "name": "Nom du client ou fournisseur"}
-        widgets = {"kind": forms.Select(), "name": forms.TextInput(attrs={"autocomplete": "organization"})}
 
 class CompanyForm(forms.ModelForm):
     class Meta:

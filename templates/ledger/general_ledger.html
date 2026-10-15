@@ -1,7 +1,7 @@
 {% extends 'ledger/base.html' %}
 {% block title %}Grand livre{% endblock %}
 {% block heading %}Grand livre{% endblock %}
-{% block subtitle %}Mouvements et solde progressif d’un compte, calculés à partir des écritures comptabilisées de {{ current_company.name }}.{% endblock %}
+{% block subtitle %}Un compte à la fois : mouvements comptabilisés, référence de facture et solde progressif pour {{ current_company.name }}.{% endblock %}
 {% block content %}
 <section class="card">
   <form method="get" class="filters">
@@ -10,9 +10,10 @@
     <div class="field"><label>Au</label><input type="date" name="end" value="{{ end }}"></div>
     <button class="button button-primary">Afficher le grand livre</button><a class="button" href="{% url 'general_ledger' %}">Effacer</a>
   </form>
+  <p class="field-help" style="margin-top:12px">Le solde est calculé ainsi : total débit − total crédit. Un solde positif est débiteur ; un solde négatif est créditeur. Les écritures en attente ne sont pas incluses.</p>
   {% if account %}
   <div class="card-head" style="margin-top:18px"><h2>{{ account.code }} · {{ account.name }}</h2><span class="badge">{{ rows.paginator.count }} mouvement(s)</span></div>
-  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Journal / écriture</th><th>N° pièce</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Solde progressif</th><th></th></tr></thead><tbody>
+  <div class="table-wrap"><table><thead><tr><th>Date</th><th>Journal / pièce comptable</th><th>Réf. facture/reçu</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th><th class="amount">Solde progressif</th><th></th></tr></thead><tbody>
     {% if rows.number == 1 %}<tr><td colspan="6"><b>Solde antérieur{% if start %} au {{ start|date:'d/m/Y' }}{% endif %}</b></td><td class="amount"><b>{{ opening|floatformat:2 }}</b></td><td></td></tr>{% endif %}
     {% for line in rows %}<tr><td>{{ line.entry.date|date:'d/m/Y' }}</td><td>{{ line.entry.get_journal_display }} · E-{{ line.entry.number|stringformat:'06d' }}</td><td>{{ line.entry.document_reference|default:'—' }}</td><td>{{ line.description|default:line.entry.description }}</td><td class="amount">{% if line.debit %}{{ line.debit|floatformat:2 }}{% else %}—{% endif %}</td><td class="amount">{% if line.credit %}{{ line.credit|floatformat:2 }}{% else %}—{% endif %}</td><td class="amount"><b>{{ line.running_balance|floatformat:2 }}</b></td><td><a class="button button-small" href="{% url 'entry_detail' line.entry.pk %}">Détail</a></td></tr>{% empty %}<tr><td colspan="8" class="empty">Aucun mouvement dans cette période.</td></tr>{% endfor %}
   </tbody></table></div>

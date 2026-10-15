@@ -1,7 +1,7 @@
 {% extends 'ledger/base.html' %}
 {% block title %}{% if entry %}Modifier E-{{ entry.number|stringformat:'06d' }}{% else %}Nouvelle écriture{% endif %}{% endblock %}
 {% block heading %}{% if entry %}Modifier E-{{ entry.number|stringformat:'06d' }}{% else %}Nouvelle écriture{% endif %}{% endblock %}
-{% block subtitle %}Le numéro comptable est attribué automatiquement. La référence de facture ou de reçu est saisie séparément.{% endblock %}
+{% block subtitle %}Le logiciel attribue automatiquement le numéro de pièce comptable après l’enregistrement (E-000001).{% endblock %}
 {% block content %}
 <form method="post" enctype="multipart/form-data" id="entry-form">
   {% csrf_token %}
@@ -14,13 +14,13 @@
       <div class="form-grid">
         <div class="field"><label for="date">Date comptable</label><input id="date" name="date" type="date" value="{{ today }}" required></div>
         <div class="field"><label for="journal">Journal</label><select id="journal" name="journal"><option value="ACH" {% if selected_journal == 'ACH' %}selected{% endif %}>Achats</option><option value="VEN" {% if selected_journal == 'VEN' %}selected{% endif %}>Ventes</option><option value="BNQ" {% if selected_journal == 'BNQ' %}selected{% endif %}>Banque</option><option value="CAI" {% if selected_journal == 'CAI' %}selected{% endif %}>Caisse</option><option value="OD" {% if selected_journal == 'OD' %}selected{% endif %}>Opérations diverses</option></select></div>
-        <div class="field"><label for="document-reference">N° de la pièce justificative</label><input id="document-reference" name="document_reference" maxlength="100" value="{{ reference }}" placeholder="Ex. FAC-2026-0042"></div>
-        {% if entry %}<div class="field"><label>N° comptable interne</label><input value="E-{{ entry.number|stringformat:'06d' }}" disabled></div>{% endif %}
+        <div class="field"><label for="document-reference">Référence de la facture ou du reçu (facultatif)</label><input id="document-reference" name="document_reference" maxlength="100" value="{{ reference }}" placeholder="Ex. FAC-2026-0042"><small class="field-help">C’est le numéro imprimé par le fournisseur. Le numéro comptable E-… est généré par le logiciel.</small></div>
+        {% if entry %}<div class="field"><label>N° de pièce comptable automatique</label><input value="E-{{ entry.number|stringformat:'06d' }}" disabled></div>{% endif %}
         <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture</label><input id="description" name="description" maxlength="240" value="{{ description }}" required placeholder="Ex. Achat de fournitures chez Togocom"></div>
       </div>
       <div class="line-editor">
         <div class="card-head"><h2>Lignes comptables</h2><button class="button button-small" type="button" id="add-line">＋ Ajouter une ligne</button></div>
-        <p class="field-help">Recherche par numéro ou intitulé. Les comptes clients et fournisseurs propres à cette entreprise sont aussi proposés. Le numéro saisi reste modifiable jusqu’à la sélection du compte.</p>
+        <p class="field-help">Tape le numéro exact ou quelques lettres de l’intitulé, puis sélectionne le compte proposé. Le logiciel garde ton texte pendant la recherche.</p>
         <div class="table-wrap">
           <table id="lines-table">
             <thead><tr><th>Compte</th><th>Détail (facultatif)</th><th class="amount">Débit</th><th class="amount">Crédit</th><th></th></tr></thead>
@@ -59,7 +59,22 @@
     const option=byLabel.get(value)||byCode.get(value);
     const hidden=input.parentElement.querySelector('.account-id');
     hidden.value=option?.dataset.id||'';
-    input.setCustomValidity(option?'':'Sélectionne un compte du plan comptable dans les suggestions.');
+    input.setCustomValidity(option?'':'Sélectionne un compte dans la liste, ou saisis son numéro complet.');
+    return option;
+  }
+  function showSuggestions(input, panel){
+    const query=input.value.trim().toLocaleLowerCase('fr');
+    panel.replaceChildren();
+    if(!query){panel.hidden=true;return}
+    const matches=options.filter(option=>option.value.toLocaleLowerCase('fr').includes(query)).slice(0,8);
+    for(const option of matches){
+      const button=document.createElement('button');
+      button.type='button';button.className='account-suggestion';button.textContent=option.value;
+      button.addEventListener('mousedown',event=>event.preventDefault());
+      button.addEventListener('click',()=>{input.value=option.value;input.parentElement.querySelector('.account-id').value=option.dataset.id;input.setCustomValidity('');panel.hidden=true;calculate()});
+      panel.appendChild(button);
+    }
+    panel.hidden=matches.length===0;
   }
   function syncRemoveButtons(){
     const rows=[...body.children];
@@ -82,16 +97,18 @@
   }
   function row(data={}){
     const tr=document.createElement('tr');
-    tr.innerHTML='<td><input class="account-search" list="account-options" autocomplete="off" placeholder="Numéro ou intitulé" aria-label="Rechercher un compte"><input type="hidden" class="account-id"></td><td><input class="line-description" maxlength="240" placeholder="Détail"></td><td><input class="debit" inputmode="decimal" placeholder="0,00"></td><td><input class="credit" inputmode="decimal" placeholder="0,00"></td><td><button type="button" class="button button-small remove" aria-label="Supprimer la ligne">×</button></td>';
+    tr.innerHTML='<td class="account-picker"><input class="account-search" autocomplete="off" placeholder="Numéro ou intitulé" aria-label="Rechercher un compte"><input type="hidden" class="account-id"><div class="account-suggestions" role="listbox" hidden></div></td><td><input class="line-description" maxlength="240" placeholder="Détail"></td><td><input class="debit" inputmode="decimal" placeholder="0,00"></td><td><input class="credit" inputmode="decimal" placeholder="0,00"></td><td><button type="button" class="button button-small remove" aria-label="Supprimer la ligne">×</button></td>';
     body.appendChild(tr);
     const accountInput=tr.querySelector('.account-search');
+    const suggestionPanel=tr.querySelector('.account-suggestions');
     const accountOption=byId.get(String(data.account_id||''));
     if(accountOption){accountInput.value=accountOption.value;tr.querySelector('.account-id').value=accountOption.dataset.id}
     tr.querySelector('.line-description').value=data.description||'';
     tr.querySelector('.debit').value=data.debit&&Number(data.debit)?String(data.debit).replace('.',','):'';
     tr.querySelector('.credit').value=data.credit&&Number(data.credit)?String(data.credit).replace('.',','):'';
-    accountInput.addEventListener('input',()=>{resolveAccount(accountInput);calculate()});
-    accountInput.addEventListener('change',()=>{resolveAccount(accountInput);calculate()});
+    accountInput.addEventListener('input',()=>{tr.querySelector('.account-id').value='';resolveAccount(accountInput);showSuggestions(accountInput,suggestionPanel);calculate()});
+    accountInput.addEventListener('focus',()=>showSuggestions(accountInput,suggestionPanel));
+    accountInput.addEventListener('blur',()=>{window.setTimeout(()=>{resolveAccount(accountInput);suggestionPanel.hidden=true;calculate()},120)});
     tr.querySelector('.line-description').addEventListener('input',calculate);
     tr.querySelectorAll('.debit,.credit').forEach(input=>input.addEventListener('input',()=>{
       const current=input.closest('tr');

@@ -4,6 +4,9 @@ from ledger import views
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("espace-administrateur/", views.admin_workspace, name="admin_workspace"),
+    path("plateforme/", views.platform_admin, name="platform_admin"),
+    path("plateforme/installation/", views.platform_admin_setup, name="platform_admin_setup"),
+    path("plateforme/mot-de-passe/", views.platform_password_change, name="platform_password_change"),
     path("premiere-installation/", views.setup, name="setup"),
     path("inscription/", views.signup, name="signup"),
     path("connexion/", views.login_view, name="login"),
@@ -25,7 +28,6 @@ urlpatterns = [
     path("pieces/<int:pk>/telecharger/", views.document_download, name="document_download"),
     path("ecritures/<int:pk>/piece/ajouter/", views.document_add, name="document_add"),
     path("plan-comptable/", views.accounts, name="accounts"),
-    path("tiers/", views.third_parties, name="third_parties"),
     path("grand-livre/", views.general_ledger, name="general_ledger"),
     path("rapprochement-bancaire/", views.bank_reconciliation, name="bank_reconciliation"),
     path("rapports/", views.reports, name="reports"),

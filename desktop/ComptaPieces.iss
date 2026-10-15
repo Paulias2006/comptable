@@ -1,5 +1,5 @@
 #define AppName "ComptaPièces"
-#define AppVersion "1.0.1"
+#define AppVersion "1.0.2"
 #define AppPublisher "ComptaPièces"
 #define AppExeName "ComptaPieces.exe"
 

@@ -1,6 +1,6 @@
 # ComptaPièces
 
-Application comptable locale pour Windows. La base et les écritures restent sur le PC. Les pièces justificatives sont envoyées vers Cloudinary privé quand `CLOUDINARY_URL` (ou les trois variables Cloudinary) est configuré ; sinon, elles restent dans `private_media/` sur le PC. Aucun compte ou mouvement de démonstration n’est généré.
+ComptaPièces est une application comptable web multi-entreprises, avec un client Windows qui ouvre le service dans une fenêtre dédiée. En production, les données sont stockées dans Neon/PostgreSQL et les pièces justificatives dans Cloudinary privé. Le mode local de développement utilise SQLite. Aucun compte ou mouvement de démonstration n’est généré.
 
 ## Démarrage
 
@@ -16,13 +16,17 @@ La fenêtre du terminal doit rester ouverte pendant l’utilisation. L’adresse
 
 ## Fonctions opérationnelles
 
-- Première installation et inscription de l’administrateur ; connexion, déconnexion et changement de mot de passe.
+- Inscription publique d’un cabinet ou d’une entreprise ; son créateur devient administrateur de cet espace.
+- Un compte peut administrer plusieurs entreprises ; les membres et écritures restent isolés par entreprise.
+- Console globale réservée aux administrateurs de la plateforme : vue des espaces inscrits et gestion des administrateurs globaux.
 - Plusieurs entreprises par compte, isolation des données entre entreprises et sélection de l’entreprise active.
 - Comptes Comptable, Responsable et Auditeur, création d’utilisateurs avec mot de passe temporaire à usage unique, changement de rôle et suspension d’accès.
 - Plan SYSCOHADA révisé complet (1 330 comptes) par entreprise, recherche par numéro ou intitulé, ajout de comptes personnalisés et contrôle d’unicité.
 - Exercices comptables, création, clôture et blocage des écritures dans un exercice fermé.
 - Saisie multi-lignes en partie double avec contrôle débit/crédit. Les écritures du comptable restent en attente ; le responsable les valide ou les rejette avant leur intégration. Les écritures comptabilisées sont conservées ; une correction crée une contrepassation.
-- Journal filtrable par libellé, journal et dates ; détails, pièces et historique des actions.
+- Journal filtrable par numéro de pièce comptable généré, référence de facture, numéro de compte, libellé, journal et dates ; détails, pièces et historique des actions.
+- Grand livre par compte avec solde antérieur et solde progressif débit moins crédit.
+- Rapprochement bancaire manuel avec mouvements non rapprochés, calcul de l’écart et correction des états enregistrés.
 - Import de PDF et d’images, capture depuis une caméra compatible, téléchargement authentifié et empreinte SHA-256.
 - Export réel du journal en XLSX et PDF ; archive ZIP avec journal CSV et pièces.
 - Sauvegarde d’entreprise téléchargeable au format ZIP, contenant ses comptes, écritures et pièces.
@@ -30,7 +34,7 @@ La fenêtre du terminal doit rester ouverte pendant l’utilisation. L’adresse
 
 ## Règles de stockage et démarrage
 
-La configuration par défaut utilise une vraie base SQLite locale, sans service cloud ni Internet pendant les opérations. Les pièces ne sont jamais servies par une URL publique : elles sont téléchargées après contrôle de l’utilisateur connecté et de l’entreprise. Une sauvegarde ZIP téléchargeable est disponible dans l’écran Exports.
+En développement local, SQLite conserve les données sur le PC. En production, configurer PostgreSQL via `DATABASE_URL`. Les pièces Cloudinary ne sont jamais servies par une URL publique : elles sont téléchargées après contrôle de l’utilisateur connecté et de l’entreprise. Une sauvegarde ZIP téléchargeable est disponible dans l’écran Exports.
 
 Un serveur partagé PostgreSQL exige une configuration et un déploiement spécifiques. Ne pas exposer le serveur Django de développement sur Internet ; le lanceur Windows le lie uniquement à `127.0.0.1`.
 
@@ -38,7 +42,7 @@ Un serveur partagé PostgreSQL exige une configuration et un déploiement spéci
 
 Le projet utilise un **Web Service Render** (application Django dynamique), Neon pour PostgreSQL et Cloudinary pour les pièces privées. Sur Render, utiliser `bash scripts/build_render.sh` comme commande de build et `python manage.py migrate --noinput && gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --access-logfile -` comme commande de démarrage. Ajouter dans l’environnement Render `DATABASE_URL`, `CLOUDINARY_URL` (ou les trois variables Cloudinary), `DJANGO_SECRET_KEY` générée par Render et `DJANGO_DEBUG=0`. Render fournit automatiquement `RENDER_EXTERNAL_HOSTNAME`, pris en charge par Django pour l’hôte et le CSRF en HTTPS. La connexion est limitée à cinq essais incorrects par utilisateur et adresse IP sur quinze minutes.
 
-La première création de compte en production se fait exclusivement depuis le shell privé du service (ou un terminal local configuré avec la `DATABASE_URL` de production), jamais depuis une page publique. Après les migrations, exécuter `python manage.py bootstrap_owner --email admin@example.com --company "NOM DE L’ENTREPRISE" --country Togo`. La commande prend la partie avant `@` comme identifiant, demande le mot de passe deux fois sans l’afficher, applique les règles Django et refuse de créer un deuxième premier administrateur. Remplacer les valeurs d’exemple par les informations exactes avant l’exécution. Ensuite, se connecter sur le site (e-mail ou identifiant) et ouvrir **Espace administrateur** dans la navigation ; l’accès est contrôlé par une session Django et le rôle Administrateur, pas par le caractère secret de l’adresse.
+Les cabinets et entreprises s’inscrivent depuis `/inscription/`. Le compte qui termine l’inscription devient administrateur de son espace et peut ajouter d’autres entreprises. Pour créer le premier administrateur global de la plateforme, définir temporairement dans Render `PLATFORM_ADMIN_SETUP_TOKEN` avec un secret aléatoire d’au moins 32 caractères, ouvrir `/plateforme/installation/`, puis saisir le jeton et choisir un nouveau mot de passe. Après création, supprimer `PLATFORM_ADMIN_SETUP_TOKEN` dans Render. La console globale se trouve ensuite à `/plateforme/`; elle n’est accessible qu’aux comptes administrateurs globaux.
 
 ## Client Windows
 
@@ -48,4 +52,4 @@ Ne jamais committer `.env`, `db.sqlite3`, `private_media/` ni les clés de servi
 
 ## Comptabilité et conformité
 
-Le journal, le plan de comptes et la balance sont calculés sur les données persistées. Les états réglementaires détaillés, la TVA, la paie, la facturation, la gestion des stocks, les rapprochements bancaires et la certification fiscale ne sont pas encore inclus. Le logiciel ne doit pas être présenté comme certifié SYSCOHADA ou comme remplaçant la validation d’un professionnel comptable local.
+Le journal, le grand livre, le rapprochement et la balance sont calculés sur les données persistées. Les états réglementaires détaillés, la TVA, la paie, la facturation, la gestion des stocks et la certification fiscale ne sont pas encore inclus. Le logiciel ne doit pas être présenté comme certifié SYSCOHADA ou comme remplaçant la validation d’un professionnel comptable local.

@@ -27,8 +27,8 @@ from django.views.decorators.http import require_POST
 from cloudinary.exceptions import Error as CloudinaryError
 import requests
 
-from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm, ThirdPartyForm
-from ledger.models import Account, AuditEvent, BankReconciliation, Company, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, ReconciliationMatch, SupportingDocument, ThirdParty
+from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm
+from ledger.models import Account, AuditEvent, BankReconciliation, Company, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, ReconciliationMatch, SupportingDocument
 from ledger.permissions import can_manage, can_post, require_company, roles
 from ledger.reports import account_balances
 from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, update_pending_entry, validate_upload
@@ -85,27 +85,27 @@ def setup(request):
 
 def login_view(request):
     if request.user.is_authenticated:
-        return redirect("dashboard")
+        return redirect("platform_admin" if request.user.is_superuser else "dashboard")
     from django.contrib.auth import authenticate
     if request.method == "POST":
         form = LoginForm(request, data=request.POST)
         if form.is_valid():
             user = form.get_user()
-            if not user.company_memberships.filter(active=True).exists():
+            if not user.is_superuser and not user.company_memberships.filter(active=True).exists():
                 form.add_error(None, "Aucun accès actif à une entreprise. Contacte son administrateur.")
             else:
                 login(request, user)
                 target = request.GET.get("next", "")
                 if target and url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
                     return redirect(target)
-                return redirect("dashboard")
+                return redirect("platform_admin" if user.is_superuser else "dashboard")
     else:
         form = LoginForm(request)
     return render(request, "ledger/login.html", {"form": form})
 
 def signup(request):
     if request.user.is_authenticated:
-        return redirect("dashboard")
+        return redirect("platform_admin" if request.user.is_superuser else "dashboard")
     if request.method == "POST":
         form = OwnerRegistrationForm(request.POST)
         if form.is_valid():
@@ -126,7 +126,7 @@ def signup(request):
                 form.add_error(None, "Ce compte vient d’être créé ou l’identifiant est déjà utilisé. Vérifie les champs et connecte-toi si tu as déjà un compte.")
             else:
                 login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-                messages.success(request, "Ton espace comptable est prêt. Tu es administrateur de cette entreprise.")
+                messages.success(request, "Ton espace est prêt. Tu es administrateur de cette entreprise ; ton cabinet peut ensuite ajouter ses autres entreprises.")
                 return redirect("dashboard")
     else:
         form = OwnerRegistrationForm()
@@ -185,6 +185,141 @@ def admin_workspace(request):
         "document_count": SupportingDocument.objects.filter(entry__company=company).count(),
         "recent_events": AuditEvent.objects.filter(company=company).select_related("actor")[:8],
     })
+
+
+@login_required
+def platform_admin(request):
+    if not request.user.is_superuser:
+        messages.error(request, "Cette page est réservée à l’administration globale de la plateforme.")
+        return redirect("dashboard")
+    if request.method == "POST":
+        action = request.POST.get("action")
+        if action == "add_admin":
+            email = request.POST.get("email", "").strip().lower()
+            first_name = request.POST.get("first_name", "").strip()
+            last_name = request.POST.get("last_name", "").strip()
+            password = request.POST.get("password", "")
+            password_confirm = request.POST.get("password_confirm", "")
+            matches = User.objects.filter(email__iexact=email)
+            if not email or "@" not in email or password != password_confirm:
+                messages.error(request, "Vérifie l’adresse e-mail et la confirmation du mot de passe.")
+            elif matches.count() > 1:
+                messages.error(request, "Plusieurs comptes utilisent déjà cette adresse. Corrige les comptes avant de continuer.")
+            else:
+                target = matches.first()
+                if target is None:
+                    username = email
+                    if User.objects.filter(username=username).exists():
+                        username = f"{email.split('@', 1)[0]}-{secrets.token_hex(4)}"
+                    target = User(username=username, email=email, first_name=first_name, last_name=last_name)
+                try:
+                    validate_password(password, target)
+                except ValidationError as exc:
+                    messages.error(request, " ".join(exc.messages))
+                else:
+                    target.email = email
+                    target.first_name = first_name or target.first_name
+                    target.last_name = last_name or target.last_name
+                    target.is_staff = True
+                    target.is_superuser = True
+                    target.set_password(password)
+                    target.save()
+                    messages.success(request, f"L’administrateur global {email} est prêt. Il pourra se connecter avec son adresse e-mail.")
+                    return redirect("platform_admin")
+        elif action == "remove_admin":
+            target = get_object_or_404(User, pk=request.POST.get("user_id"), is_superuser=True)
+            if target.pk == request.user.pk:
+                messages.error(request, "Tu ne peux pas retirer ton propre accès depuis cette session.")
+            elif User.objects.filter(is_superuser=True).count() <= 1:
+                messages.error(request, "Au moins un administrateur global doit rester actif.")
+            else:
+                target.is_superuser = False
+                target.is_staff = False
+                target.save(update_fields=["is_superuser", "is_staff"])
+                messages.success(request, f"L’accès global de {target.email or target.username} a été retiré.")
+                return redirect("platform_admin")
+    companies = Company.objects.annotate(
+        member_count=Count("memberships", filter=Q(memberships__active=True), distinct=True),
+        entry_count=Count("entries", distinct=True),
+    ).order_by("name")
+    return render(request, "ledger/platform_admin.html", {
+        "companies": companies,
+        "platform_admins": User.objects.filter(is_superuser=True).order_by("email", "username"),
+        "user_count": User.objects.count(),
+        "company_count": Company.objects.count(),
+        "entry_count": JournalEntry.objects.count(),
+    })
+
+
+def platform_admin_setup(request):
+    """One-time, token-protected bootstrap for the first platform administrator."""
+    if not settings.PLATFORM_ADMIN_SETUP_TOKEN:
+        raise Http404
+    state, _ = InstallationState.objects.get_or_create(key="platformadmin")
+    if state.claimed or User.objects.filter(is_superuser=True).exists():
+        if not state.claimed:
+            InstallationState.objects.filter(pk=state.pk, claimed=False).update(claimed=True, claimed_at=timezone.now())
+        return redirect("platform_admin" if request.user.is_authenticated and request.user.is_superuser else "login")
+    if request.method == "POST":
+        token = request.POST.get("setup_token", "")
+        email = request.POST.get("email", "").strip().lower()
+        first_name = request.POST.get("first_name", "").strip()
+        last_name = request.POST.get("last_name", "").strip()
+        password = request.POST.get("password", "")
+        password_confirm = request.POST.get("password_confirm", "")
+        if not secrets.compare_digest(token, settings.PLATFORM_ADMIN_SETUP_TOKEN):
+            messages.error(request, "Jeton invalide. Recopie la valeur actuelle de PLATFORM_ADMIN_SETUP_TOKEN depuis Render.")
+        elif not email or "@" not in email or password != password_confirm:
+            messages.error(request, "Vérifie l’adresse e-mail et la confirmation du mot de passe.")
+        else:
+            with transaction.atomic():
+                state = InstallationState.objects.select_for_update().get(pk="platformadmin")
+                if state.claimed or User.objects.filter(is_superuser=True).exists():
+                    messages.error(request, "L’initialisation de l’administrateur global a déjà été utilisée.")
+                    return redirect("login")
+                matches = User.objects.select_for_update().filter(email__iexact=email)
+                if matches.count() > 1:
+                    messages.error(request, "Plusieurs comptes utilisent cette adresse e-mail. Contacte le support.")
+                    return render(request, "ledger/platform_admin_setup.html")
+                user = matches.first()
+                if user is None:
+                    username = email
+                    if User.objects.filter(username=username).exists():
+                        username = f"{email.split('@', 1)[0]}-{secrets.token_hex(4)}"
+                    user = User(username=username, email=email)
+                user.email = email
+                user.first_name = first_name or user.first_name
+                user.last_name = last_name or user.last_name
+                try:
+                    validate_password(password, user)
+                except ValidationError as exc:
+                    for error in exc.messages:
+                        messages.error(request, error)
+                    return render(request, "ledger/platform_admin_setup.html")
+                user.set_password(password)
+                user.is_staff = True
+                user.is_superuser = True
+                user.save()
+                state.claimed = True
+                state.claimed_at = timezone.now()
+                state.save(update_fields=["claimed", "claimed_at"])
+            login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+            messages.success(request, "Le compte administrateur global est créé. Supprime maintenant PLATFORM_ADMIN_SETUP_TOKEN dans Render.")
+            return redirect("platform_admin")
+    return render(request, "ledger/platform_admin_setup.html")
+
+
+@login_required
+def platform_password_change(request):
+    if not request.user.is_superuser:
+        return redirect("dashboard")
+    form = PasswordChangeForm(request.user, request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        user = form.save()
+        update_session_auth_hash(request, user)
+        messages.success(request, "Mot de passe de l’administrateur global modifié.")
+        return redirect("platform_admin")
+    return render(request, "ledger/platform_password_change.html", {"form": form})
 
 @login_required
 @require_company
@@ -438,33 +573,6 @@ def accounts(request):
 
 
 @login_required
-@roles("OWNER")
-def third_parties(request):
-    form = ThirdPartyForm(request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        with transaction.atomic():
-            company = Company.objects.select_for_update().get(pk=request.company.pk)
-            kind = form.cleaned_data["kind"]
-            prefix = "401" if kind == ThirdParty.Kind.SUPPLIER else "411"
-            sequence = ThirdParty.objects.filter(company=company, kind=kind).count() + 1
-            third_code = f"F{sequence:06d}" if kind == ThirdParty.Kind.SUPPLIER else f"C{sequence:06d}"
-            account_code = f"{prefix}{sequence:06d}"
-            while Account.objects.filter(company=company, code=account_code).exists():
-                sequence += 1
-                third_code = f"F{sequence:06d}" if kind == ThirdParty.Kind.SUPPLIER else f"C{sequence:06d}"
-                account_code = f"{prefix}{sequence:06d}"
-            account = Account.objects.create(company=company, code=account_code, name=form.cleaned_data["name"][:160])
-            third_party = form.save(commit=False)
-            third_party.company, third_party.code, third_party.account = company, third_code, account
-            third_party.save()
-            AuditEvent.objects.create(company=company, actor=request.user, action="third_party.created", object_type="ThirdParty", object_id=str(third_party.pk), details={"kind": kind, "account": account_code})
-        messages.success(request, f"{third_party.get_kind_display()} ajouté à {request.company.name} avec le compte {account_code}.")
-        return redirect("third_parties")
-    parties = ThirdParty.objects.filter(company=request.company, active=True).select_related("account")
-    return render(request, "ledger/third_parties.html", {"form": form, "third_parties": parties})
-
-
-@login_required
 @roles("OWNER", "ACCOUNTANT", "MANAGER", "AUDITOR")
 def general_ledger(request):
     accounts = Account.objects.filter(company=request.company, active=True).order_by(Cast("code", IntegerField()))
@@ -539,6 +647,14 @@ def bank_reconciliation(request):
         except ValueError:
             messages.error(request, "La période de rapprochement est invalide.")
             start = end = None
+    editing = None
+    reconciliation_id = request.POST.get("reconciliation_id") if request.method == "POST" else request.GET.get("reconciliation")
+    if reconciliation_id:
+        editing = BankReconciliation.objects.filter(pk=reconciliation_id, company=request.company).select_related("account").first()
+        if editing and request.method == "GET":
+            account = accounts.filter(pk=editing.account_id).first()
+            start, end = editing.start_date, editing.end_date
+            start_raw, end_raw = start.isoformat(), end.isoformat()
     if request.method == "POST" and request.membership.role in {"OWNER", "ACCOUNTANT"} and account and start and end:
         try:
             raw_balance = request.POST.get("statement_balance", "0").replace(" ", "").replace(",", ".")
@@ -546,38 +662,54 @@ def bank_reconciliation(request):
             if not statement_balance.is_finite() or statement_balance.as_tuple().exponent < -2:
                 raise InvalidOperation
             with transaction.atomic():
-                reconciliation = BankReconciliation.objects.create(company=request.company, account=account,
-                    start_date=start, end_date=end, statement_balance=statement_balance, created_by=request.user)
+                if reconciliation_id:
+                    reconciliation = BankReconciliation.objects.select_for_update().get(pk=reconciliation_id, company=request.company)
+                    if reconciliation.account_id != account.pk:
+                        raise ValueError("Le compte ne correspond pas à cet état.")
+                    reconciliation.start_date, reconciliation.end_date = start, end
+                    reconciliation.statement_balance = statement_balance
+                    reconciliation.save(update_fields=["start_date", "end_date", "statement_balance"])
+                else:
+                    reconciliation = BankReconciliation.objects.create(company=request.company, account=account,
+                        start_date=start, end_date=end, statement_balance=statement_balance, created_by=request.user)
                 selected = request.POST.getlist("lines")
                 eligible = JournalLine.objects.filter(pk__in=selected, entry__company=request.company,
                     entry__state=JournalEntry.State.POSTED, entry__date__lte=end, account=account)
-                if eligible.count() != len(set(selected)) or ReconciliationMatch.objects.filter(journal_line__in=eligible).exists():
+                conflicts = ReconciliationMatch.objects.filter(journal_line__in=eligible)
+                if reconciliation_id:
+                    conflicts = conflicts.exclude(reconciliation=reconciliation)
+                if eligible.count() != len(set(selected)) or conflicts.exists():
                     raise ValueError("Un mouvement choisi est déjà rapproché ou n’appartient pas à ce compte.")
+                old_line_ids = list(reconciliation.matches.values_list("journal_line_id", flat=True)) if reconciliation_id else []
+                if reconciliation_id:
+                    reconciliation.matches.all().delete()
                 ReconciliationMatch.objects.bulk_create([ReconciliationMatch(reconciliation=reconciliation, journal_line=line) for line in eligible])
-                AuditEvent.objects.create(company=request.company, actor=request.user, action="bank.reconciliation.created",
-                    object_type="BankReconciliation", object_id=str(reconciliation.pk), details={"account": account.code, "end_date": end.isoformat(), "matched_count": eligible.count()})
-            messages.success(request, "État de rapprochement enregistré. Consulte le solde ajusté et l’écart calculé ci-dessous.")
+                AuditEvent.objects.create(company=request.company, actor=request.user,
+                    action="bank.reconciliation.updated" if reconciliation_id else "bank.reconciliation.created",
+                    object_type="BankReconciliation", object_id=str(reconciliation.pk), details={"account": account.code, "start_date": start.isoformat(), "end_date": end.isoformat(), "matched_count": eligible.count(), "previous_matched_ids": old_line_ids})
+            messages.success(request, "État de rapprochement corrigé." if reconciliation_id else "État de rapprochement enregistré.")
             return redirect(f"/rapprochement-bancaire/?account={account.pk}&start_date={start.isoformat()}&end_date={end.isoformat()}&reconciliation={reconciliation.pk}")
         except (InvalidOperation, ValueError, IntegrityError):
-            messages.error(request, "Vérifie le solde du relevé et les mouvements sélectionnés. Aucun rapprochement n’a été enregistré.")
+            messages.error(request, "Vérifie le solde du relevé, la période et les mouvements sélectionnés. L’état n’a pas été modifié.")
     elif request.method == "POST":
         messages.error(request, "Il faut un compte et une période valides ; seul un administrateur ou un comptable peut enregistrer le rapprochement.")
     candidates = JournalLine.objects.none()
     if account and end:
         candidates = JournalLine.objects.filter(entry__company=request.company, entry__state=JournalEntry.State.POSTED,
-            entry__date__lte=end, account=account).exclude(pk__in=ReconciliationMatch.objects.values("journal_line_id"))
+            entry__date__lte=end, account=account)
+        matched_elsewhere = ReconciliationMatch.objects.all()
+        if editing:
+            matched_elsewhere = matched_elsewhere.exclude(reconciliation=editing)
+        candidates = candidates.exclude(pk__in=matched_elsewhere.values("journal_line_id"))
         candidates = candidates.select_related("entry").order_by("entry__date", "entry__number")[:500]
     reconciliations = BankReconciliation.objects.filter(company=request.company).select_related("account", "created_by")[:30]
     reports = [{"item": item, **_reconciliation_totals(item)} for item in reconciliations]
-    selected_report = None
-    selected_pk = request.GET.get("reconciliation")
-    if selected_pk:
-        item = next((row["item"] for row in reports if str(row["item"].pk) == selected_pk), None)
-        if item:
-            selected_report = {"item": item, **_reconciliation_totals(item)}
+    selected_report = {"item": editing, **_reconciliation_totals(editing)} if editing else None
+    selected_match_ids = set(editing.matches.values_list("journal_line_id", flat=True)) if editing else set()
     return render(request, "ledger/reconciliation.html", {"accounts": accounts, "account": account,
         "start": start_raw, "end": end_raw, "candidates": candidates, "reports": reports, "selected_report": selected_report,
-        "statement_balance": request.POST.get("statement_balance", "") if request.method == "POST" else ""})
+        "selected_match_ids": selected_match_ids, "editing_reconciliation": editing,
+        "statement_balance": request.POST.get("statement_balance", "") if request.method == "POST" else (editing.statement_balance if editing else "")})
 
 @login_required
 @roles("OWNER")
