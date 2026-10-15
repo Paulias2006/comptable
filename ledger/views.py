@@ -73,7 +73,7 @@ def login_view(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     if not Membership.objects.exists():
-        raise Http404
+        return render(request, "ledger/uninitialized.html", status=503)
     from django.contrib.auth import authenticate
     if request.method == "POST":
         form = LoginForm(request, data=request.POST)
