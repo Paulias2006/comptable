@@ -73,9 +73,12 @@ def setup(request):
                 state.claimed = True
                 state.claimed_at = timezone.now()
                 state.save(update_fields=["claimed", "claimed_at"])
-                login(request, user)
-                messages.success(request, "Votre espace comptable est prêt. Pour verrouiller aussi l’initialisation, supprimez DJANGO_SETUP_TOKEN dans Render.")
-                return redirect("dashboard")
+            # The configured Axes + Model backends make Django require an
+            # explicit backend here. Keep login outside the DB transaction so
+            # a session error cannot roll back the newly created company.
+            login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+            messages.success(request, "Votre espace comptable est prêt. Pour verrouiller aussi l’initialisation, supprimez DJANGO_SETUP_TOKEN dans Render.")
+            return redirect("dashboard")
     else:
         form = OwnerRegistrationForm()
     return render(request, "ledger/setup.html", {"form": form, "token_required": not settings.DEBUG, "token_error": token_error})
