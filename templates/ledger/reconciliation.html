@@ -1,0 +1,33 @@
+{% extends 'ledger/base.html' %}
+{% block title %}Rapprochement bancaire{% endblock %}
+{% block heading %}Rapprochement bancaire{% endblock %}
+{% block subtitle %}Compare le relevé bancaire aux mouvements réellement comptabilisés de l’entreprise.{% endblock %}
+{% block content %}
+<section class="grid two-col">
+  <article class="card">
+    <h2>Préparer un rapprochement</h2>
+    <p class="field-help">Choisis le compte bancaire et la période. La liste affiche les mouvements de ce compte qui ne sont pas encore rapprochés.</p>
+    <form method="get" class="filters">
+      <div class="field"><label>Compte bancaire</label><select name="account" required><option value="">Choisir un compte de classe 52</option>{% for item in accounts %}<option value="{{ item.pk }}" {% if account.pk == item.pk %}selected{% endif %}>{{ item.code }} · {{ item.name }}</option>{% endfor %}</select></div>
+      <div class="field"><label>Du</label><input type="date" name="start_date" value="{{ start }}" required></div>
+      <div class="field"><label>Au</label><input type="date" name="end_date" value="{{ end }}" required></div>
+      <button class="button">Afficher les mouvements</button>
+    </form>
+    {% if account and end %}
+    <form method="post" style="margin-top:18px">{% csrf_token %}
+      <input type="hidden" name="account" value="{{ account.pk }}"><input type="hidden" name="start_date" value="{{ start }}"><input type="hidden" name="end_date" value="{{ end }}">
+      <div class="field"><label for="statement-balance">Solde final indiqué par le relevé</label><input id="statement-balance" name="statement_balance" inputmode="decimal" value="{{ statement_balance }}" placeholder="0,00" required></div>
+      <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Sur relevé</th><th>Date</th><th>Écriture</th><th>Pièce</th><th>Libellé</th><th class="amount">Débit</th><th class="amount">Crédit</th></tr></thead><tbody>
+      {% for line in candidates %}<tr><td><input type="checkbox" name="lines" value="{{ line.pk }}" aria-label="Marquer comme présent sur le relevé"></td><td>{{ line.entry.date|date:'d/m/Y' }}</td><td>E-{{ line.entry.number|stringformat:'06d' }}</td><td>{{ line.entry.document_reference|default:'—' }}</td><td>{{ line.description|default:line.entry.description }}</td><td class="amount">{{ line.debit|floatformat:2 }}</td><td class="amount">{{ line.credit|floatformat:2 }}</td></tr>{% empty %}<tr><td colspan="7" class="empty">Aucun mouvement bancaire non rapproché avant cette date.</td></tr>{% endfor %}
+      </tbody></table></div>
+      <p class="field-help" style="margin-top:10px">Coche les mouvements que tu retrouves sur le relevé. Les lignes laissées décochées sont traitées comme des mouvements en attente.</p>
+      <button class="button button-primary" style="margin-top:12px">Enregistrer et calculer l’écart</button>
+    </form>{% endif %}
+  </article>
+  <aside class="grid">
+    {% if selected_report %}<section class="card"><h2>État calculé</h2><p><b>{{ selected_report.item.account.code }} · {{ selected_report.item.account.name }}</b><br><span class="field-help">Arrêté au {{ selected_report.item.end_date|date:'d/m/Y' }} · Relevé : {{ selected_report.item.statement_balance|floatformat:2 }}</span></p><div class="table-wrap"><table><tbody><tr><td>Solde comptable</td><td class="amount">{{ selected_report.book_balance|floatformat:2 }}</td></tr><tr><td>Mouvements en attente (non cochés)</td><td class="amount">{{ selected_report.outstanding_net|floatformat:2 }}</td></tr><tr><td>Solde relevé ajusté</td><td class="amount">{{ selected_report.adjusted_statement|floatformat:2 }}</td></tr><tr><td><b>Écart à expliquer</b></td><td class="amount"><b>{{ selected_report.difference|floatformat:2 }}</b></td></tr></tbody></table></div><p class="field-help">{% if selected_report.difference == 0 %}Les soldes concordent après prise en compte des mouvements non encore visibles sur le relevé.{% else %}Un écart reste à expliquer. Vérifie le solde du relevé, les lignes cochées et les écritures manquantes.{% endif %}</p></section>{% endif %}
+    <section class="card"><h2>États précédents</h2>{% for report in reports %}<div style="padding:10px 0;border-bottom:1px solid var(--line)"><b>{{ report.item.account.code }} · {{ report.item.end_date|date:'d/m/Y' }}</b><p class="field-help">Solde relevé {{ report.item.statement_balance|floatformat:2 }} · Écart {{ report.difference|floatformat:2 }}</p><a class="button button-small" href="?account={{ report.item.account_id }}&end_date={{ report.item.end_date|date:'Y-m-d' }}&reconciliation={{ report.item.pk }}">Voir l’état</a></div>{% empty %}<p class="field-help">Aucun état de rapprochement enregistré.</p>{% endfor %}</section>
+    <section class="card"><h2>Comment lire l’état</h2><p class="field-help">Les mouvements cochés sont enregistrés comme rapprochés et exclus des prochains mouvements en attente. Le calcul compare le solde comptable au solde du relevé ajusté des mouvements non cochés.</p><p class="field-help">Cette page ne se connecte pas à la banque et n’importe pas de relevé : le rapprochement se fait à partir du relevé que tu consultes.</p></section>
+  </aside>
+</section>
+{% endblock %}

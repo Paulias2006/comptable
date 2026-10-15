@@ -62,7 +62,7 @@ def parse_amount(value):
     return amount.quantize(Decimal("0.01"))
 
 @transaction.atomic
-def post_entry(*, company, user, date, journal, description, lines, documents=(), reverses=None, state=JournalEntry.State.POSTED):
+def post_entry(*, company, user, date, journal, description, lines, documents=(), reverses=None, state=JournalEntry.State.POSTED, document_reference=""):
     if not description.strip():
         raise ValidationError("Le libellé est obligatoire.")
     period = FiscalPeriod.objects.filter(company=company, start_date__lte=date, end_date__gte=date).first()
@@ -93,7 +93,7 @@ def post_entry(*, company, user, date, journal, description, lines, documents=()
     Company.objects.select_for_update().get(pk=company.pk)
     company.refresh_from_db(fields=["next_entry_number"])
     entry = JournalEntry.objects.create(company=company, fiscal_period=period, number=company.next_entry_number, date=date, journal=journal,
-        description=description.strip(), created_by=user, posted_at=timezone.now() if state == JournalEntry.State.POSTED else None,
+        description=description.strip(), document_reference=document_reference.strip()[:100], created_by=user, posted_at=timezone.now() if state == JournalEntry.State.POSTED else None,
         state=state, reverses=reverses)
     company.next_entry_number += 1
     company.save(update_fields=["next_entry_number"])
@@ -104,6 +104,61 @@ def post_entry(*, company, user, date, journal, description, lines, documents=()
         SupportingDocument.objects.create(entry=entry, file=uploaded, original_name=uploaded.name[:255], sha256=digest,
             size=uploaded.size, uploaded_by=user)
     AuditEvent.objects.create(company=company, actor=user, action="entry.posted" if state == JournalEntry.State.POSTED else "entry.submitted", object_type="JournalEntry", object_id=str(entry.pk),
+        details={"number": entry.number, "debit": str(debit_total), "credit": str(credit_total)})
+    return entry
+
+@transaction.atomic
+def update_pending_entry(*, entry, company, user, date, journal, description, document_reference="", lines, documents=()):
+    entry = JournalEntry.objects.select_for_update().select_related("company").get(pk=entry.pk, company=company)
+    if entry.state != JournalEntry.State.PENDING:
+        raise ValidationError("Seule une écriture en attente peut être modifiée. Une écriture comptabilisée se corrige par contrepassation.")
+    if not description.strip():
+        raise ValidationError("Le libellé est obligatoire.")
+    if journal not in dict(JournalEntry._meta.get_field("journal").choices):
+        raise ValidationError("Le journal sélectionné est invalide.")
+    period = FiscalPeriod.objects.filter(company=company, start_date__lte=date, end_date__gte=date).first()
+    if not period:
+        raise ValidationError("Aucun exercice ne couvre cette date.")
+    if period.closed:
+        raise ValidationError(f"L’exercice {period.label} est clôturé.")
+    if len(lines) < 2:
+        raise ValidationError("Une écriture doit contenir au moins deux lignes.")
+    for uploaded in documents:
+        validate_upload(uploaded)
+    normalized = []
+    debit_total = Decimal("0.00")
+    credit_total = Decimal("0.00")
+    for raw in lines:
+        account = Account.objects.filter(company=company, active=True, pk=raw["account_id"]).first()
+        if not account:
+            raise ValidationError("Un compte sélectionné n’existe pas dans cette entreprise.")
+        debit = parse_amount(raw.get("debit") or "0")
+        credit = parse_amount(raw.get("credit") or "0")
+        if (debit > 0) == (credit > 0):
+            raise ValidationError("Chaque ligne doit contenir un débit ou un crédit, mais pas les deux.")
+        normalized.append((account, debit, credit, str(raw.get("description", ""))[:240]))
+        debit_total += debit
+        credit_total += credit
+    if debit_total <= 0 or debit_total != credit_total:
+        raise ValidationError(f"Écriture déséquilibrée : débit {debit_total} ≠ crédit {credit_total}.")
+
+    entry.date = date
+    entry.fiscal_period = period
+    entry.journal = journal
+    entry.description = description.strip()
+    entry.document_reference = document_reference.strip()[:100]
+    entry.save(update_fields=["date", "fiscal_period", "journal", "description", "document_reference"])
+    entry.lines.all().delete()
+    JournalLine.objects.bulk_create([
+        JournalLine(entry=entry, account=account, debit=debit, credit=credit, description=line_description)
+        for account, debit, credit, line_description in normalized
+    ])
+    for uploaded in documents:
+        digest = hashlib.sha256(uploaded.read()).hexdigest()
+        uploaded.seek(0)
+        SupportingDocument.objects.create(entry=entry, file=uploaded, original_name=uploaded.name[:255], sha256=digest,
+            size=uploaded.size, uploaded_by=user)
+    AuditEvent.objects.create(company=company, actor=user, action="entry.updated", object_type="JournalEntry", object_id=str(entry.pk),
         details={"number": entry.number, "debit": str(debit_total), "credit": str(credit_total)})
     return entry
 

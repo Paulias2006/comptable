@@ -2,6 +2,7 @@ import json
 import os
 import secrets
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from mimetypes import guess_type
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Sum, Count, Q, IntegerField
 from django.db.models.functions import Cast
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -26,11 +27,11 @@ from django.views.decorators.http import require_POST
 from cloudinary.exceptions import Error as CloudinaryError
 import requests
 
-from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm
-from ledger.models import Account, AuditEvent, Company, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, SupportingDocument
+from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm, ThirdPartyForm
+from ledger.models import Account, AuditEvent, BankReconciliation, Company, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, ReconciliationMatch, SupportingDocument, ThirdParty
 from ledger.permissions import can_manage, can_post, require_company, roles
 from ledger.reports import account_balances
-from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, validate_upload
+from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, update_pending_entry, validate_upload
 
 def cloudinary_upload_error_message(exc):
     if "cloud_name mismatch" in str(exc).lower():
@@ -154,7 +155,18 @@ def journal(request):
     start = request.GET.get("start", "")
     end = request.GET.get("end", "")
     if query:
-        qs = qs.filter(description__icontains=query)
+        search = (
+            Q(description__icontains=query)
+            | Q(document_reference__icontains=query)
+            | Q(lines__account__code__icontains=query)
+            | Q(lines__account__name__icontains=query)
+            | Q(lines__description__icontains=query)
+            | Q(documents__original_name__icontains=query)
+        )
+        entry_number = query.upper().removeprefix("E-")
+        if entry_number.isdigit():
+            search |= Q(number=int(entry_number))
+        qs = qs.filter(search).distinct()
     if journal_type:
         qs = qs.filter(journal=journal_type)
     try:
@@ -177,16 +189,26 @@ def approvals(request):
 @require_company
 def entry_new(request):
     accounts = Account.objects.filter(company=request.company, active=True).order_by(Cast("code", IntegerField()))
+    initial_lines = []
+    reference = ""
+    entry_date = timezone.localdate().isoformat()
+    selected_journal = "ACH"
+    description = ""
     if not can_post(request):
         messages.error(request, "Votre rôle ne permet pas de saisir des écritures.")
         return redirect("journal")
     if request.method == "POST":
         try:
             rows = json.loads(request.POST.get("lines_json", "[]"))
+            initial_lines = rows
+            reference = request.POST.get("document_reference", "")
+            entry_date = request.POST.get("date", entry_date)
+            selected_journal = request.POST.get("journal", "ACH")
+            description = request.POST.get("description", "")
             target_state = JournalEntry.State.PENDING if request.membership.role == "ACCOUNTANT" else JournalEntry.State.POSTED
             entry = post_entry(company=request.company, user=request.user, date=date.fromisoformat(request.POST.get("date", "")),
                 journal=request.POST.get("journal", "ACH"), description=request.POST.get("description", ""),
-                lines=rows, documents=request.FILES.getlist("documents"), state=target_state)
+                lines=rows, documents=request.FILES.getlist("documents"), state=target_state, document_reference=reference)
             messages.success(request, f"Écriture E-{entry.number:06d} envoyée au responsable pour validation." if target_state == JournalEntry.State.PENDING else f"Écriture E-{entry.number:06d} comptabilisée et équilibrée.")
             return redirect("entry_detail", pk=entry.pk)
         except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
@@ -195,13 +217,49 @@ def entry_new(request):
             messages.error(request, cloudinary_upload_error_message(exc) + " L’écriture n’a pas été enregistrée.")
         except requests.RequestException:
             messages.error(request, "Cloudinary est momentanément inaccessible. L’écriture n’a pas été enregistrée ; réessaie sans pièce ou plus tard.")
-    return render(request, "ledger/entry_form.html", {"accounts": accounts, "today": timezone.localdate().isoformat()})
+    return render(request, "ledger/entry_form.html", {"accounts": accounts, "today": entry_date,
+        "initial_lines": initial_lines, "reference": reference, "selected_journal": selected_journal, "description": description})
 
 @login_required
 @require_company
 def entry_detail(request, pk):
     entry = get_object_or_404(JournalEntry.objects.prefetch_related("lines__account", "documents"), pk=pk, company=request.company)
     return render(request, "ledger/entry_detail.html", {"entry": entry})
+
+
+@login_required
+@roles("OWNER", "ACCOUNTANT")
+def entry_edit(request, pk):
+    entry = get_object_or_404(JournalEntry.objects.prefetch_related("lines__account", "documents"), pk=pk, company=request.company)
+    if entry.state != JournalEntry.State.PENDING:
+        messages.error(request, "Cette écriture est déjà comptabilisée ou clôturée. Corrige-la par contrepassation pour conserver la piste d’audit.")
+        return redirect("entry_detail", pk=pk)
+    accounts = Account.objects.filter(company=request.company, active=True).order_by(Cast("code", IntegerField()))
+    initial_lines = [{"account_id": line.account_id, "description": line.description, "debit": str(line.debit), "credit": str(line.credit)} for line in entry.lines.all()]
+    reference, entry_date = entry.document_reference, entry.date.isoformat()
+    selected_journal, description = entry.journal, entry.description
+    if request.method == "POST":
+        try:
+            rows = json.loads(request.POST.get("lines_json", "[]"))
+            initial_lines = rows
+            reference = request.POST.get("document_reference", "")
+            entry_date = request.POST.get("date", entry_date)
+            selected_journal = request.POST.get("journal", entry.journal)
+            description = request.POST.get("description", "")
+            update_pending_entry(entry=entry, company=request.company, user=request.user,
+                date=date.fromisoformat(entry_date), journal=selected_journal, description=description,
+                document_reference=reference, lines=rows, documents=request.FILES.getlist("documents"))
+            messages.success(request, f"Écriture E-{entry.number:06d} mise à jour et renvoyée pour validation.")
+            return redirect("entry_detail", pk=entry.pk)
+        except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            messages.error(request, "; ".join(exc.messages) if isinstance(exc, ValidationError) else "Vérifie la date et les lignes de l’écriture.")
+        except CloudinaryError as exc:
+            messages.error(request, cloudinary_upload_error_message(exc) + " L’écriture n’a pas été modifiée.")
+        except requests.RequestException:
+            messages.error(request, "Le stockage des pièces est momentanément inaccessible. L’écriture n’a pas été modifiée.")
+    return render(request, "ledger/entry_form.html", {"entry": entry, "accounts": accounts,
+        "today": entry_date, "initial_lines": initial_lines, "reference": reference,
+        "selected_journal": selected_journal, "description": description})
 
 @login_required
 @require_POST
@@ -337,6 +395,149 @@ def accounts(request):
     elif request.method == "POST":
         messages.error(request, "Seul l’administrateur peut modifier le plan comptable.")
     return render(request, "ledger/accounts.html", {"accounts": page_obj, "form": form, "q": query})
+
+
+@login_required
+@roles("OWNER")
+def third_parties(request):
+    form = ThirdPartyForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            company = Company.objects.select_for_update().get(pk=request.company.pk)
+            kind = form.cleaned_data["kind"]
+            prefix = "401" if kind == ThirdParty.Kind.SUPPLIER else "411"
+            sequence = ThirdParty.objects.filter(company=company, kind=kind).count() + 1
+            third_code = f"F{sequence:06d}" if kind == ThirdParty.Kind.SUPPLIER else f"C{sequence:06d}"
+            account_code = f"{prefix}{sequence:06d}"
+            while Account.objects.filter(company=company, code=account_code).exists():
+                sequence += 1
+                third_code = f"F{sequence:06d}" if kind == ThirdParty.Kind.SUPPLIER else f"C{sequence:06d}"
+                account_code = f"{prefix}{sequence:06d}"
+            account = Account.objects.create(company=company, code=account_code, name=form.cleaned_data["name"][:160])
+            third_party = form.save(commit=False)
+            third_party.company, third_party.code, third_party.account = company, third_code, account
+            third_party.save()
+            AuditEvent.objects.create(company=company, actor=request.user, action="third_party.created", object_type="ThirdParty", object_id=str(third_party.pk), details={"kind": kind, "account": account_code})
+        messages.success(request, f"{third_party.get_kind_display()} ajouté à {request.company.name} avec le compte {account_code}.")
+        return redirect("third_parties")
+    parties = ThirdParty.objects.filter(company=request.company, active=True).select_related("account")
+    return render(request, "ledger/third_parties.html", {"form": form, "third_parties": parties})
+
+
+@login_required
+@roles("OWNER", "ACCOUNTANT", "MANAGER", "AUDITOR")
+def general_ledger(request):
+    accounts = Account.objects.filter(company=request.company, active=True).order_by(Cast("code", IntegerField()))
+    account = accounts.filter(pk=request.GET.get("account", "")).first() if request.GET.get("account") else None
+    start_raw, end_raw = request.GET.get("start", ""), request.GET.get("end", "")
+    start = end = None
+    try:
+        start = date.fromisoformat(start_raw) if start_raw else None
+        end = date.fromisoformat(end_raw) if end_raw else None
+        if start and end and end < start:
+            raise ValueError
+    except ValueError:
+        messages.error(request, "La période du grand livre est invalide.")
+        start_raw, end_raw, start, end = "", "", None, None
+
+    rows = []
+    opening = 0
+    if account:
+        posted = JournalLine.objects.filter(entry__company=request.company, entry__state=JournalEntry.State.POSTED, account=account)
+        if start:
+            prior = posted.filter(entry__date__lt=start).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+            opening = (prior["debit"] or 0) - (prior["credit"] or 0)
+        period_lines = posted
+        if start:
+            period_lines = period_lines.filter(entry__date__gte=start)
+        if end:
+            period_lines = period_lines.filter(entry__date__lte=end)
+        running = opening
+        for line in period_lines.select_related("entry", "account").order_by("entry__date", "entry__number", "pk")[:10000]:
+            running += line.debit - line.credit
+            line.running_balance = running
+            rows.append(line)
+    page_obj = Paginator(rows, 100).get_page(request.GET.get("page"))
+    return render(request, "ledger/general_ledger.html", {"accounts": accounts, "account": account,
+        "opening": opening, "rows": page_obj, "start": start_raw, "end": end_raw})
+
+
+def _reconciliation_totals(reconciliation):
+    matched_ids = ReconciliationMatch.objects.filter(
+        reconciliation__company=reconciliation.company,
+        reconciliation__account=reconciliation.account,
+        reconciliation__created_at__lte=reconciliation.created_at,
+        reconciliation__end_date__lte=reconciliation.end_date,
+    ).values("journal_line_id")
+    book = JournalLine.objects.filter(entry__company=reconciliation.company,
+        entry__state=JournalEntry.State.POSTED, entry__date__lte=reconciliation.end_date,
+        account=reconciliation.account).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+    outstanding = JournalLine.objects.filter(entry__company=reconciliation.company,
+        entry__state=JournalEntry.State.POSTED, entry__date__lte=reconciliation.end_date,
+        account=reconciliation.account).exclude(pk__in=matched_ids).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+    book_balance = (book["debit"] or Decimal("0")) - (book["credit"] or Decimal("0"))
+    outstanding_net = (outstanding["debit"] or Decimal("0")) - (outstanding["credit"] or Decimal("0"))
+    adjusted_statement = reconciliation.statement_balance + outstanding_net
+    return {"book_balance": book_balance, "outstanding_net": outstanding_net,
+        "adjusted_statement": adjusted_statement, "difference": book_balance - adjusted_statement}
+
+
+@login_required
+@roles("OWNER", "ACCOUNTANT", "MANAGER", "AUDITOR")
+def bank_reconciliation(request):
+    accounts = Account.objects.filter(company=request.company, active=True, code__startswith="52").order_by(Cast("code", IntegerField()))
+    account_id = request.POST.get("account") if request.method == "POST" else request.GET.get("account")
+    account = accounts.filter(pk=account_id).first() if account_id else None
+    start_raw = request.POST.get("start_date", "") if request.method == "POST" else request.GET.get("start_date", "")
+    end_raw = request.POST.get("end_date", "") if request.method == "POST" else request.GET.get("end_date", "")
+    start = end = None
+    if start_raw and end_raw:
+        try:
+            start, end = date.fromisoformat(start_raw), date.fromisoformat(end_raw)
+            if end < start:
+                raise ValueError
+        except ValueError:
+            messages.error(request, "La période de rapprochement est invalide.")
+            start = end = None
+    if request.method == "POST" and request.membership.role in {"OWNER", "ACCOUNTANT"} and account and start and end:
+        try:
+            raw_balance = request.POST.get("statement_balance", "0").replace(" ", "").replace(",", ".")
+            statement_balance = Decimal(raw_balance)
+            if not statement_balance.is_finite() or statement_balance.as_tuple().exponent < -2:
+                raise InvalidOperation
+            with transaction.atomic():
+                reconciliation = BankReconciliation.objects.create(company=request.company, account=account,
+                    start_date=start, end_date=end, statement_balance=statement_balance, created_by=request.user)
+                selected = request.POST.getlist("lines")
+                eligible = JournalLine.objects.filter(pk__in=selected, entry__company=request.company,
+                    entry__state=JournalEntry.State.POSTED, entry__date__lte=end, account=account)
+                if eligible.count() != len(set(selected)) or ReconciliationMatch.objects.filter(journal_line__in=eligible).exists():
+                    raise ValueError("Un mouvement choisi est déjà rapproché ou n’appartient pas à ce compte.")
+                ReconciliationMatch.objects.bulk_create([ReconciliationMatch(reconciliation=reconciliation, journal_line=line) for line in eligible])
+                AuditEvent.objects.create(company=request.company, actor=request.user, action="bank.reconciliation.created",
+                    object_type="BankReconciliation", object_id=str(reconciliation.pk), details={"account": account.code, "end_date": end.isoformat(), "matched_count": eligible.count()})
+            messages.success(request, "État de rapprochement enregistré. Consulte le solde ajusté et l’écart calculé ci-dessous.")
+            return redirect(f"/rapprochement-bancaire/?account={account.pk}&start_date={start.isoformat()}&end_date={end.isoformat()}&reconciliation={reconciliation.pk}")
+        except (InvalidOperation, ValueError, IntegrityError):
+            messages.error(request, "Vérifie le solde du relevé et les mouvements sélectionnés. Aucun rapprochement n’a été enregistré.")
+    elif request.method == "POST":
+        messages.error(request, "Il faut un compte et une période valides ; seul un administrateur ou un comptable peut enregistrer le rapprochement.")
+    candidates = JournalLine.objects.none()
+    if account and end:
+        candidates = JournalLine.objects.filter(entry__company=request.company, entry__state=JournalEntry.State.POSTED,
+            entry__date__lte=end, account=account).exclude(pk__in=ReconciliationMatch.objects.values("journal_line_id"))
+        candidates = candidates.select_related("entry").order_by("entry__date", "entry__number")[:500]
+    reconciliations = BankReconciliation.objects.filter(company=request.company).select_related("account", "created_by")[:30]
+    reports = [{"item": item, **_reconciliation_totals(item)} for item in reconciliations]
+    selected_report = None
+    selected_pk = request.GET.get("reconciliation")
+    if selected_pk:
+        item = next((row["item"] for row in reports if str(row["item"].pk) == selected_pk), None)
+        if item:
+            selected_report = {"item": item, **_reconciliation_totals(item)}
+    return render(request, "ledger/reconciliation.html", {"accounts": accounts, "account": account,
+        "start": start_raw, "end": end_raw, "candidates": candidates, "reports": reports, "selected_report": selected_report,
+        "statement_balance": request.POST.get("statement_balance", "") if request.method == "POST" else ""})
 
 @login_required
 @roles("OWNER")

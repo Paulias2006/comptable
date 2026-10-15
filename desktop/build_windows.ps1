@@ -20,4 +20,4 @@ if ($LASTEXITCODE -ne 0) { throw 'Installation des dépendances du client Window
 if ($LASTEXITCODE -ne 0) { throw 'Création de ComptaPieces.exe échouée.' }
 & $Compiler /Qp desktop\ComptaPieces.iss
 if ($LASTEXITCODE -ne 0) { throw "Creation de l'installeur Inno Setup echouee." }
-Write-Host "Installeur prêt : $Root\dist\ComptaPieces-Setup-1.0.0.exe" -ForegroundColor Green
+Write-Host "Installeur prêt : $Root\dist\ComptaPieces-Setup-1.0.1.exe" -ForegroundColor Green

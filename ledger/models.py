@@ -57,6 +57,27 @@ class Account(models.Model):
         return f"{self.code} · {self.name}"
 
 
+class ThirdParty(models.Model):
+    class Kind(models.TextChoices):
+        SUPPLIER = "SUPPLIER", "Fournisseur"
+        CUSTOMER = "CUSTOMER", "Client"
+
+    company = models.ForeignKey(Company, on_delete=models.CASCADE, related_name="third_parties")
+    kind = models.CharField(max_length=12, choices=Kind.choices)
+    code = models.CharField(max_length=24)
+    name = models.CharField(max_length=180)
+    account = models.OneToOneField(Account, on_delete=models.PROTECT, related_name="third_party")
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["kind", "code"]
+        constraints = [models.UniqueConstraint(fields=["company", "kind", "code"], name="unique_company_third_party_code")]
+
+    def __str__(self):
+        return f"{self.code} · {self.name}"
+
+
 class FiscalPeriod(models.Model):
     company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="fiscal_periods")
     label = models.CharField(max_length=80)
@@ -85,6 +106,7 @@ class JournalEntry(models.Model):
     date = models.DateField(default=timezone.localdate)
     journal = models.CharField(max_length=24, choices=[("ACH", "Achats"), ("VEN", "Ventes"), ("BNQ", "Banque"), ("CAI", "Caisse"), ("OD", "Opérations diverses")], default="ACH")
     description = models.CharField(max_length=240)
+    document_reference = models.CharField("Référence de la pièce", max_length=100, blank=True)
     state = models.CharField(max_length=10, choices=State.choices, default=State.PENDING)
     created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="created_entries")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -131,6 +153,25 @@ class SupportingDocument(models.Model):
     size = models.PositiveBigIntegerField()
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+
+
+class BankReconciliation(models.Model):
+    company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="bank_reconciliations")
+    account = models.ForeignKey(Account, on_delete=models.PROTECT, related_name="reconciliations")
+    start_date = models.DateField()
+    end_date = models.DateField()
+    statement_balance = models.DecimalField(max_digits=16, decimal_places=2)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-end_date", "-created_at"]
+        constraints = [models.UniqueConstraint(fields=["company", "account", "end_date"], name="unique_account_reconciliation_end")]
+
+
+class ReconciliationMatch(models.Model):
+    reconciliation = models.ForeignKey(BankReconciliation, on_delete=models.CASCADE, related_name="matches")
+    journal_line = models.OneToOneField(JournalLine, on_delete=models.PROTECT, related_name="reconciliation_match")
 
 
 class AuditEvent(models.Model):

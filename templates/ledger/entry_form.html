@@ -1,23 +1,26 @@
 {% extends 'ledger/base.html' %}
-{% block title %}Nouvelle écriture{% endblock %}
-{% block heading %}Nouvelle écriture{% endblock %}
-{% block subtitle %}Saisie en partie double : validation possible uniquement si total débit = total crédit.{% endblock %}
+{% block title %}{% if entry %}Modifier E-{{ entry.number|stringformat:'06d' }}{% else %}Nouvelle écriture{% endif %}{% endblock %}
+{% block heading %}{% if entry %}Modifier E-{{ entry.number|stringformat:'06d' }}{% else %}Nouvelle écriture{% endif %}{% endblock %}
+{% block subtitle %}Le numéro comptable est attribué automatiquement. La référence de facture ou de reçu est saisie séparément.{% endblock %}
 {% block content %}
 <form method="post" enctype="multipart/form-data" id="entry-form">
   {% csrf_token %}
   <datalist id="account-options">
     {% for a in accounts %}<option value="{{ a.code }} · {{ a.name }}" data-id="{{ a.id }}"></option>{% endfor %}
   </datalist>
+  {{ initial_lines|json_script:"initial-lines-data" }}
   <section class="grid two-col">
     <article class="card">
       <div class="form-grid">
         <div class="field"><label for="date">Date comptable</label><input id="date" name="date" type="date" value="{{ today }}" required></div>
-        <div class="field"><label for="journal">Journal</label><select id="journal" name="journal"><option value="ACH">Achats</option><option value="VEN">Ventes</option><option value="BNQ">Banque</option><option value="CAI">Caisse</option><option value="OD">Opérations diverses</option></select></div>
-        <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture</label><input id="description" name="description" maxlength="240" required placeholder="Ex. Facture fournisseur du 15/10/2026"></div>
+        <div class="field"><label for="journal">Journal</label><select id="journal" name="journal"><option value="ACH" {% if selected_journal == 'ACH' %}selected{% endif %}>Achats</option><option value="VEN" {% if selected_journal == 'VEN' %}selected{% endif %}>Ventes</option><option value="BNQ" {% if selected_journal == 'BNQ' %}selected{% endif %}>Banque</option><option value="CAI" {% if selected_journal == 'CAI' %}selected{% endif %}>Caisse</option><option value="OD" {% if selected_journal == 'OD' %}selected{% endif %}>Opérations diverses</option></select></div>
+        <div class="field"><label for="document-reference">N° de la pièce justificative</label><input id="document-reference" name="document_reference" maxlength="100" value="{{ reference }}" placeholder="Ex. FAC-2026-0042"></div>
+        {% if entry %}<div class="field"><label>N° comptable interne</label><input value="E-{{ entry.number|stringformat:'06d' }}" disabled></div>{% endif %}
+        <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture</label><input id="description" name="description" maxlength="240" value="{{ description }}" required placeholder="Ex. Achat de fournitures chez Togocom"></div>
       </div>
       <div class="line-editor">
         <div class="card-head"><h2>Lignes comptables</h2><button class="button button-small" type="button" id="add-line">＋ Ajouter une ligne</button></div>
-        <p class="field-help">Le plan SYSCOHADA révisé complet est disponible. Recherche par numéro ou intitulé. Une écriture doit avoir au moins deux lignes équilibrées.</p>
+        <p class="field-help">Recherche par numéro ou intitulé. Les comptes clients et fournisseurs propres à cette entreprise sont aussi proposés. Le numéro saisi reste modifiable jusqu’à la sélection du compte.</p>
         <div class="table-wrap">
           <table id="lines-table">
             <thead><tr><th>Compte</th><th>Détail (facultatif)</th><th class="amount">Débit</th><th class="amount">Crédit</th><th></th></tr></thead>
@@ -36,7 +39,7 @@
         <div id="file-list" class="field-help" style="margin-top:10px"></div>
         <p class="field-help" style="margin-top:12px">Les pièces sont conservées dans le stockage configuré pour l’application. Leur téléchargement passe par une vérification d’accès ; une empreinte SHA-256 permet de contrôler chaque fichier.</p>
       </section>
-      <section class="card"><h2>Avant validation</h2><ul class="field-help" style="line-height:1.9;padding-left:18px"><li>Chaque ligne touche un compte de cette entreprise.</li><li>Une ligne a soit un débit soit un crédit.</li><li>Les totaux doivent être égaux au centime.</li><li>Une écriture validée est figée ; corrige-la par contrepassation.</li></ul></section>
+      <section class="card"><h2>Avant validation</h2><ul class="field-help" style="line-height:1.9;padding-left:18px"><li>Chaque ligne touche un compte de cette entreprise.</li><li>Une ligne a soit un débit soit un crédit.</li><li>Les totaux doivent être égaux au centime.</li><li>Une écriture comptabilisée se corrige par contrepassation pour garder son historique.</li></ul></section>
     </aside>
   </section>
 </form>
@@ -49,6 +52,7 @@
   const options=[...document.querySelectorAll('#account-options option')];
   const byLabel=new Map(options.map(option=>[option.value,option]));
   const byCode=new Map(options.map(option=>[option.value.split(' · ',1)[0],option]));
+  const byId=new Map(options.map(option=>[String(option.dataset.id),option]));
   const amount=n=>Math.round((Number(n)||0)*100)/100;
   function resolveAccount(input){
     const value=input.value.trim();
@@ -56,7 +60,6 @@
     const hidden=input.parentElement.querySelector('.account-id');
     hidden.value=option?.dataset.id||'';
     input.setCustomValidity(option?'':'Sélectionne un compte du plan comptable dans les suggestions.');
-    if(option&&byCode.has(value))input.value=option.value;
   }
   function syncRemoveButtons(){
     const rows=[...body.children];
@@ -77,11 +80,16 @@
     document.getElementById('submit-entry').disabled=!balanced;
     document.getElementById('lines-json').value=JSON.stringify(lines);
   }
-  function row(){
+  function row(data={}){
     const tr=document.createElement('tr');
     tr.innerHTML='<td><input class="account-search" list="account-options" autocomplete="off" placeholder="Numéro ou intitulé" aria-label="Rechercher un compte"><input type="hidden" class="account-id"></td><td><input class="line-description" maxlength="240" placeholder="Détail"></td><td><input class="debit" inputmode="decimal" placeholder="0,00"></td><td><input class="credit" inputmode="decimal" placeholder="0,00"></td><td><button type="button" class="button button-small remove" aria-label="Supprimer la ligne">×</button></td>';
     body.appendChild(tr);
     const accountInput=tr.querySelector('.account-search');
+    const accountOption=byId.get(String(data.account_id||''));
+    if(accountOption){accountInput.value=accountOption.value;tr.querySelector('.account-id').value=accountOption.dataset.id}
+    tr.querySelector('.line-description').value=data.description||'';
+    tr.querySelector('.debit').value=data.debit&&Number(data.debit)?String(data.debit).replace('.',','):'';
+    tr.querySelector('.credit').value=data.credit&&Number(data.credit)?String(data.credit).replace('.',','):'';
     accountInput.addEventListener('input',()=>{resolveAccount(accountInput);calculate()});
     accountInput.addEventListener('change',()=>{resolveAccount(accountInput);calculate()});
     tr.querySelector('.line-description').addEventListener('input',calculate);
@@ -95,7 +103,9 @@
     syncRemoveButtons();
   }
   add.addEventListener('click',row);
-  row();row();calculate();
+  const initialLines=JSON.parse(document.getElementById('initial-lines-data').textContent||'[]');
+  if(initialLines.length)initialLines.forEach(row);else{row();row()}
+  calculate();
   document.getElementById('documents').addEventListener('change',event=>{document.getElementById('file-list').textContent=[...event.target.files].map(file=>`${file.name} · ${(file.size/1024/1024).toFixed(2)} Mo`).join(' · ')});
 })();
 </script>
