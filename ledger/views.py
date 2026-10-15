@@ -39,14 +39,24 @@ def cloudinary_upload_error_message(exc):
     return "Cloudinary a refusé la pièce. Vérifie les identifiants du même environnement produit, puis réessaie."
 
 def setup(request):
-    if not settings.DEBUG:
+    # Local development remains convenient. In production the setup endpoint is
+    # enabled only by an out-of-band, high-entropy Render environment secret.
+    if not settings.DEBUG and not settings.DJANGO_SETUP_TOKEN:
         raise Http404
     if Membership.objects.exists():
         InstallationState.objects.filter(pk="primary", claimed=False).update(claimed=True, claimed_at=timezone.now())
         return redirect("login")
+    state = InstallationState.objects.get(pk="primary")
+    if state.claimed:
+        raise Http404
+    token_error = ""
     if request.method == "POST":
+        supplied_token = request.POST.get("setup_token", "")
+        token_valid = settings.DEBUG or secrets.compare_digest(supplied_token, settings.DJANGO_SETUP_TOKEN)
+        if not token_valid:
+            token_error = "Jeton d’initialisation invalide. Copie-le depuis les variables Render."
         form = OwnerRegistrationForm(request.POST)
-        if form.is_valid():
+        if token_valid and form.is_valid():
             with transaction.atomic():
                 state = InstallationState.objects.select_for_update().get(pk="primary")
                 if state.claimed or Membership.objects.exists():
@@ -64,11 +74,11 @@ def setup(request):
                 state.claimed_at = timezone.now()
                 state.save(update_fields=["claimed", "claimed_at"])
                 login(request, user)
-                messages.success(request, "Votre espace comptable est prêt. Les écritures de démonstration ne sont pas importées.")
+                messages.success(request, "Votre espace comptable est prêt. Pour verrouiller aussi l’initialisation, supprimez DJANGO_SETUP_TOKEN dans Render.")
                 return redirect("dashboard")
     else:
         form = OwnerRegistrationForm()
-    return render(request, "ledger/setup.html", {"form": form})
+    return render(request, "ledger/setup.html", {"form": form, "token_required": not settings.DEBUG, "token_error": token_error})
 
 def login_view(request):
     if request.user.is_authenticated:
