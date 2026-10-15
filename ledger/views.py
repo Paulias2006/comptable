@@ -16,6 +16,7 @@ from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Sum, Count, Q, IntegerField
 from django.db.models.functions import Cast
+from django.db import transaction
 from django.http import FileResponse, Http404, HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -25,7 +26,7 @@ from cloudinary.exceptions import Error as CloudinaryError
 import requests
 
 from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm
-from ledger.models import Account, AuditEvent, FiscalPeriod, JournalEntry, JournalLine, Membership, SupportingDocument
+from ledger.models import Account, AuditEvent, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, SupportingDocument
 from ledger.permissions import can_manage, can_post, require_company, roles
 from ledger.reports import account_balances
 from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, validate_upload
@@ -37,19 +38,34 @@ def cloudinary_upload_error_message(exc):
 
 def setup(request):
     if Membership.objects.exists():
+        InstallationState.objects.filter(pk="primary", claimed=False).update(claimed=True, claimed_at=timezone.now())
         return redirect("login")
     if request.method == "POST":
         form = OwnerRegistrationForm(request.POST)
         if form.is_valid():
-            user = form.save(commit=False)
-            user.first_name = form.cleaned_data["first_name"]
-            user.last_name = form.cleaned_data["last_name"]
-            user.email = form.cleaned_data["email"]
-            user.save()
-            create_company_for_owner(user=user, name=form.cleaned_data["company_name"], tax_id=form.cleaned_data["tax_id"], country=form.cleaned_data["country"])
-            login(request, user)
-            messages.success(request, "Votre espace comptable est prêt. Les écritures de démonstration ne sont pas importées.")
-            return redirect("dashboard")
+            expected_token = settings.DJANGO_SETUP_TOKEN
+            if not settings.DEBUG and (not expected_token or not secrets.compare_digest(form.cleaned_data["setup_token"], expected_token)):
+                form.add_error(None, "Code d’initialisation Render incorrect ou absent. Vérifie la variable DJANGO_SETUP_TOKEN dans Render.")
+            else:
+                with transaction.atomic():
+                    state = InstallationState.objects.select_for_update().get(pk="primary")
+                    if state.claimed or Membership.objects.exists():
+                        state.claimed = True
+                        state.claimed_at = state.claimed_at or timezone.now()
+                        state.save(update_fields=["claimed", "claimed_at"])
+                        return redirect("login")
+                    user = form.save(commit=False)
+                    user.first_name = form.cleaned_data["first_name"]
+                    user.last_name = form.cleaned_data["last_name"]
+                    user.email = form.cleaned_data["email"]
+                    user.save()
+                    create_company_for_owner(user=user, name=form.cleaned_data["company_name"], tax_id=form.cleaned_data["tax_id"], country=form.cleaned_data["country"])
+                    state.claimed = True
+                    state.claimed_at = timezone.now()
+                    state.save(update_fields=["claimed", "claimed_at"])
+                login(request, user)
+                messages.success(request, "Votre espace comptable est prêt. Les écritures de démonstration ne sont pas importées.")
+                return redirect("dashboard")
     else:
         form = OwnerRegistrationForm()
     return render(request, "ledger/setup.html", {"form": form})

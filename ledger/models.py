@@ -8,6 +8,12 @@ from django.db import models
 from django.utils import timezone
 
 
+class InstallationState(models.Model):
+    key = models.CharField(max_length=16, primary_key=True, default="primary")
+    claimed = models.BooleanField(default=False)
+    claimed_at = models.DateTimeField(null=True, blank=True)
+
+
 class Company(models.Model):
     name = models.CharField("Nom de l’entreprise", max_length=180)
     tax_id = models.CharField("Identifiant fiscal", max_length=80, blank=True)

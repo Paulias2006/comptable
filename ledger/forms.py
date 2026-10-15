@@ -1,4 +1,5 @@
 from django import forms
+from django.conf import settings
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.models import User
 
@@ -15,11 +16,17 @@ class OwnerRegistrationForm(UserCreationForm):
     company_name = forms.CharField(label="Nom de l’entreprise", max_length=180)
     tax_id = forms.CharField(label="Identifiant fiscal", max_length=80, required=False)
     country = forms.CharField(label="Pays", max_length=80, initial="Togo")
+    setup_token = forms.CharField(label="Code d’initialisation Render", required=False,
+        widget=forms.PasswordInput(attrs={"autocomplete": "off"}))
     class Meta:
         model = User
         fields = ("username", "first_name", "last_name", "email", "password1", "password2")
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if settings.DEBUG:
+            self.fields.pop("setup_token", None)
+        else:
+            self.fields["setup_token"].required = True
         self.fields["username"].label = "Identifiant de connexion"
         self.fields["password1"].label = "Mot de passe (10 caractères minimum)"
         self.fields["password2"].label = "Confirmer le mot de passe"
