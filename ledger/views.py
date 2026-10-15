@@ -8,6 +8,7 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import login, logout
+from django.contrib.auth.password_validation import validate_password
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.forms import PasswordChangeForm
 from django.contrib.auth.decorators import login_required
@@ -26,7 +27,7 @@ from cloudinary.exceptions import Error as CloudinaryError
 import requests
 
 from ledger.forms import AccountForm, CompanyForm, LoginForm, MemberForm, OwnerRegistrationForm
-from ledger.models import Account, AuditEvent, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, SupportingDocument
+from ledger.models import Account, AuditEvent, Company, FiscalPeriod, InstallationState, JournalEntry, JournalLine, Membership, SupportingDocument
 from ledger.permissions import can_manage, can_post, require_company, roles
 from ledger.reports import account_balances
 from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, validate_upload
@@ -37,32 +38,30 @@ def cloudinary_upload_error_message(exc):
     return "Cloudinary a refusé la pièce. Vérifie les identifiants du même environnement produit, puis réessaie."
 
 def setup(request):
+    if not settings.DEBUG:
+        raise Http404
     if Membership.objects.exists():
         InstallationState.objects.filter(pk="primary", claimed=False).update(claimed=True, claimed_at=timezone.now())
         return redirect("login")
     if request.method == "POST":
         form = OwnerRegistrationForm(request.POST)
         if form.is_valid():
-            expected_token = settings.DJANGO_SETUP_TOKEN
-            if not settings.DEBUG and (not expected_token or not secrets.compare_digest(form.cleaned_data["setup_token"], expected_token)):
-                form.add_error(None, "Code d’initialisation Render incorrect ou absent. Vérifie la variable DJANGO_SETUP_TOKEN dans Render.")
-            else:
-                with transaction.atomic():
-                    state = InstallationState.objects.select_for_update().get(pk="primary")
-                    if state.claimed or Membership.objects.exists():
-                        state.claimed = True
-                        state.claimed_at = state.claimed_at or timezone.now()
-                        state.save(update_fields=["claimed", "claimed_at"])
-                        return redirect("login")
-                    user = form.save(commit=False)
-                    user.first_name = form.cleaned_data["first_name"]
-                    user.last_name = form.cleaned_data["last_name"]
-                    user.email = form.cleaned_data["email"]
-                    user.save()
-                    create_company_for_owner(user=user, name=form.cleaned_data["company_name"], tax_id=form.cleaned_data["tax_id"], country=form.cleaned_data["country"])
+            with transaction.atomic():
+                state = InstallationState.objects.select_for_update().get(pk="primary")
+                if state.claimed or Membership.objects.exists():
                     state.claimed = True
-                    state.claimed_at = timezone.now()
+                    state.claimed_at = state.claimed_at or timezone.now()
                     state.save(update_fields=["claimed", "claimed_at"])
+                    return redirect("login")
+                user = form.save(commit=False)
+                user.first_name = form.cleaned_data["first_name"]
+                user.last_name = form.cleaned_data["last_name"]
+                user.email = form.cleaned_data["email"]
+                user.save()
+                create_company_for_owner(user=user, name=form.cleaned_data["company_name"], tax_id=form.cleaned_data["tax_id"], country=form.cleaned_data["country"])
+                state.claimed = True
+                state.claimed_at = timezone.now()
+                state.save(update_fields=["claimed", "claimed_at"])
                 login(request, user)
                 messages.success(request, "Votre espace comptable est prêt. Les écritures de démonstration ne sont pas importées.")
                 return redirect("dashboard")
@@ -74,7 +73,7 @@ def login_view(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     if not Membership.objects.exists():
-        return redirect("setup")
+        raise Http404
     from django.contrib.auth import authenticate
     if request.method == "POST":
         form = LoginForm(request, data=request.POST)
@@ -129,6 +128,22 @@ def dashboard(request):
         "credit": totals["credit"] or 0, "missing_count": missing.count(), "recent": recent,
         "pending_count": entries.filter(state=JournalEntry.State.PENDING).count(),
         "recent_backup": timezone.localtime(company.last_backup_at).strftime("%d/%m/%Y %H:%M") if company.last_backup_at else "Aucune sauvegarde effectuée"})
+
+@login_required
+@roles("OWNER")
+def admin_workspace(request):
+    company = request.company
+    members_qs = Membership.objects.filter(company=company)
+    entries_qs = JournalEntry.objects.filter(company=company)
+    return render(request, "ledger/admin_workspace.html", {
+        "member_count": members_qs.count(),
+        "active_member_count": members_qs.filter(active=True).count(),
+        "admin_count": members_qs.filter(role=Membership.Role.OWNER, active=True).count(),
+        "pending_count": entries_qs.filter(state=JournalEntry.State.PENDING).count(),
+        "posted_count": entries_qs.filter(state=JournalEntry.State.POSTED).count(),
+        "document_count": SupportingDocument.objects.filter(entry__company=company).count(),
+        "recent_events": AuditEvent.objects.filter(company=company).select_related("actor")[:8],
+    })
 
 @login_required
 @require_company
@@ -376,26 +391,57 @@ def fiscal_period_action(request):
 
 @login_required
 @roles("OWNER")
+@transaction.atomic
 def members(request):
     form = MemberForm(request.POST or None)
     generated_password = request.session.pop("new_member_password", None)
     if request.method == "POST" and request.POST.get("membership_id"):
-        membership = get_object_or_404(Membership, pk=request.POST["membership_id"], company=request.company)
         action = request.POST.get("action")
-        if action == "role" and membership.role != "OWNER":
+        # Serialize owner changes on the company row so concurrent requests
+        # cannot both demote/disable the last two administrators.
+        Company.objects.select_for_update().get(pk=request.company.pk)
+        current_membership = Membership.objects.filter(company=request.company, user=request.user, active=True).first()
+        if not current_membership or current_membership.role != Membership.Role.OWNER:
+            messages.error(request, "Ton accès administrateur a été modifié. Reconnecte-toi pour continuer.")
+            return redirect("dashboard")
+        membership = get_object_or_404(Membership.objects.select_for_update(), pk=request.POST["membership_id"], company=request.company)
+        active_owners = Membership.objects.filter(company=request.company, role=Membership.Role.OWNER, active=True).count()
+        if action == "role" and membership.role == Membership.Role.OWNER and request.POST.get("role") != "OWNER" and active_owners <= 1:
+            messages.error(request, "Conserve au moins un administrateur actif pour cette entreprise.")
+        elif action == "role" and membership.user_id == request.user.id and request.POST.get("role") != "OWNER":
+            messages.error(request, "Tu ne peux pas retirer toi-même ton rôle administrateur.")
+        elif action == "role":
             role = request.POST.get("role")
-            if role in {"ACCOUNTANT", "MANAGER", "AUDITOR"}:
+            if role in {"OWNER", "ACCOUNTANT", "MANAGER", "AUDITOR"}:
                 membership.role = role; membership.save(update_fields=["role"])
                 AuditEvent.objects.create(company=request.company, actor=request.user, action="member.role_changed", object_type="Membership", object_id=str(membership.pk), details={"role": role})
                 messages.success(request, "Rôle utilisateur mis à jour.")
-        elif action == "disable" and membership.role != "OWNER":
+        elif action == "disable" and membership.role == Membership.Role.OWNER and active_owners <= 1:
+            messages.error(request, "Impossible de suspendre le dernier administrateur actif.")
+        elif action == "disable" and membership.user_id == request.user.id:
+            messages.error(request, "Tu ne peux pas suspendre ton propre accès administrateur.")
+        elif action == "disable":
             membership.active = False; membership.save(update_fields=["active"])
             AuditEvent.objects.create(company=request.company, actor=request.user, action="member.disabled", object_type="Membership", object_id=str(membership.pk))
             messages.success(request, "Accès à cette entreprise suspendu.")
-        elif action == "enable" and membership.role != "OWNER":
+        elif action == "enable":
             membership.active = True; membership.save(update_fields=["active"])
             AuditEvent.objects.create(company=request.company, actor=request.user, action="member.enabled", object_type="Membership", object_id=str(membership.pk))
             messages.success(request, "Accès à cette entreprise réactivé.")
+        elif action == "reset_password":
+            other_companies = membership.user.company_memberships.exclude(company=request.company)
+            if membership.user_id == request.user.id:
+                messages.error(request, "Utilise la page de changement de ton propre mot de passe.")
+            elif other_companies.exists():
+                messages.error(request, "Ce compte est partagé avec une autre entreprise. Pour protéger les autres accès, demande à son utilisateur de changer lui-même son mot de passe.")
+            else:
+                generated_password = secrets.token_urlsafe(24)
+                membership.user.set_password(generated_password)
+                membership.user.save(update_fields=["password"])
+                membership.user.company_memberships.filter(company=request.company, active=True).update(must_change_password=True)
+                request.session["new_member_password"] = generated_password
+                AuditEvent.objects.create(company=request.company, actor=request.user, action="member.password_reset", object_type="User", object_id=str(membership.user_id))
+                messages.success(request, "Mot de passe provisoire généré. Le changement sera exigé à la prochaine connexion.")
         else:
             messages.error(request, "Opération utilisateur non autorisée.")
         return redirect("members")

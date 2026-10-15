@@ -5,6 +5,9 @@ __pycache__/
 db.sqlite3
 /private_media/
 /staticfiles/
+/build/
+/dist/
+/*.spec
 /backups/
 /.agents/
 /skills-lock.json

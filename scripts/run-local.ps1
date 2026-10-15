@@ -28,7 +28,7 @@ Write-Host 'Garde cette fenêtre ouverte. Ctrl+C arrête le logiciel.'
 $BrowserJob = Start-Job -ScriptBlock {
     for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
         try {
-            $Response = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/admin/login/' -UseBasicParsing -TimeoutSec 2
+            $Response = Invoke-WebRequest -Uri 'http://127.0.0.1:8000/' -MaximumRedirection 5 -UseBasicParsing -TimeoutSec 2
             if ($Response.StatusCode -eq 200) { Start-Process 'http://127.0.0.1:8000'; break }
         } catch { Start-Sleep -Milliseconds 250 }
     }

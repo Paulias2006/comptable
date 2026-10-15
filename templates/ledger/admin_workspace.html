@@ -1,0 +1,24 @@
+{% extends 'ledger/base.html' %}
+{% block title %}Espace administrateur{% endblock %}
+{% block heading %}Espace administrateur{% endblock %}
+{% block subtitle %}Pilotage des accès, des écritures et des pièces de {{ current_company.name }}.{% endblock %}
+{% block top_action %}<a class="button button-primary" href="{% url 'members' %}">Gérer les utilisateurs</a>{% endblock %}
+{% block content %}
+<section class="grid metrics">
+  <article class="card"><span class="metric-icon">♙</span><div class="metric-label">Comptes actifs</div><div class="metric-value">{{ active_member_count }} / {{ member_count }}</div><div class="metric-foot">Utilisateurs liés à cette entreprise</div></article>
+  <article class="card"><span class="metric-icon">◈</span><div class="metric-label">Administrateurs actifs</div><div class="metric-value">{{ admin_count }}</div><div class="metric-foot">Au moins un administrateur doit rester actif</div></article>
+  <article class="card"><span class="metric-icon">✓</span><div class="metric-label">Écritures à valider</div><div class="metric-value">{{ pending_count }}</div><div class="metric-foot"><a href="{% url 'approvals' %}">Ouvrir les validations →</a></div></article>
+  <article class="card"><span class="metric-icon">▧</span><div class="metric-label">Pièces archivées</div><div class="metric-value">{{ document_count }}</div><div class="metric-foot">Fichiers associés aux écritures</div></article>
+</section>
+<section class="grid two-col">
+  <article class="card"><div class="card-head"><h2>Activité récente</h2><a class="button button-small" href="{% url 'audit_log' %}">Historique complet</a></div>
+    {% if recent_events %}<div class="table-wrap"><table style="min-width:480px"><thead><tr><th>Date</th><th>Utilisateur</th><th>Action</th><th>Objet</th></tr></thead><tbody>{% for event in recent_events %}<tr><td>{{ event.created_at|date:'d/m/Y H:i' }}</td><td>{{ event.actor.get_full_name|default:event.actor.username|default:'Compte supprimé' }}</td><td>{{ event.action }}</td><td>{{ event.object_type }} {{ event.object_id }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<div class="empty"><div class="empty-icon">◷</div>Aucune activité enregistrée pour le moment.</div>{% endif %}
+  </article>
+  <aside class="card"><h2>Accès rapides</h2><div class="quick-actions">
+    <a class="quick-action" href="{% url 'members' %}"><span class="qa-icon">♙</span><span><b>Utilisateurs et administrateurs</b><small>Ajouter un compte, gérer les rôles ou réinitialiser un mot de passe.</small></span></a>
+    <a class="quick-action" href="{% url 'company_settings' %}"><span class="qa-icon">⚙</span><span><b>Configuration de l’entreprise</b><small>Informations légales et exercices comptables.</small></span></a>
+    <a class="quick-action" href="{% url 'password_change' %}"><span class="qa-icon">⚿</span><span><b>Sécurité de mon compte</b><small>Changer votre mot de passe personnel.</small></span></a>
+    <a class="quick-action" href="{% url 'audit_log' %}"><span class="qa-icon">◉</span><span><b>Journal d’audit</b><small>Consulter les actions réalisées dans l’espace.</small></span></a>
+  </div><hr><p class="field-help">L’adresse de cette page n’accorde aucun accès à elle seule : une session valide et le rôle Administrateur sont toujours requis.</p></aside>
+</section>
+{% endblock %}

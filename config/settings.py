@@ -18,8 +18,10 @@ def load_env():
 
 load_env()
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
+render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+if render_hostname and DEBUG:
+    raise ImproperlyConfigured("DJANGO_DEBUG doit rester à 0 sur Render.")
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "").strip()
-DJANGO_SETUP_TOKEN = os.getenv("DJANGO_SETUP_TOKEN", "").strip()
 if not SECRET_KEY:
     if DEBUG:
         SECRET_KEY = "local-only-key-change-before-network-use"
@@ -28,7 +30,6 @@ if not SECRET_KEY:
 if not DEBUG and (SECRET_KEY == "local-only-key-change-before-network-use" or len(SECRET_KEY) < 50):
     raise ImproperlyConfigured("DJANGO_SECRET_KEY doit contenir au moins 50 caractères aléatoires en production.")
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",") if h.strip()]
-render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
 if render_hostname and render_hostname not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append(render_hostname)
 CSRF_TRUSTED_ORIGINS = [f"https://{render_hostname}"] if render_hostname else []

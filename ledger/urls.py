@@ -3,6 +3,7 @@ from django.urls import path
 from ledger import views
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("espace-administrateur/", views.admin_workspace, name="admin_workspace"),
     path("premiere-installation/", views.setup, name="setup"),
     path("connexion/", views.login_view, name="login"),
     path("deconnexion/", views.logout_view, name="logout"),

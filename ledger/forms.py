@@ -1,13 +1,20 @@
 from django import forms
-from django.conf import settings
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.models import User
 
 from ledger.models import Account, Company, Membership
 
 class LoginForm(AuthenticationForm):
-    username = forms.CharField(label="Identifiant", widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "Votre identifiant"}))
+    username = forms.CharField(label="E-mail ou identifiant", widget=forms.TextInput(attrs={"autocomplete": "username", "placeholder": "Votre e-mail ou identifiant"}))
     password = forms.CharField(label="Mot de passe", widget=forms.PasswordInput(attrs={"autocomplete": "current-password", "placeholder": "Votre mot de passe"}))
+
+    def clean(self):
+        submitted = self.cleaned_data.get("username", "").strip()
+        if "@" in submitted:
+            user = User.objects.filter(email__iexact=submitted).only("username").first()
+            if user:
+                self.cleaned_data["username"] = user.username
+        return super().clean()
 
 class OwnerRegistrationForm(UserCreationForm):
     first_name = forms.CharField(label="Prénom", max_length=150)
@@ -16,17 +23,11 @@ class OwnerRegistrationForm(UserCreationForm):
     company_name = forms.CharField(label="Nom de l’entreprise", max_length=180)
     tax_id = forms.CharField(label="Identifiant fiscal", max_length=80, required=False)
     country = forms.CharField(label="Pays", max_length=80, initial="Togo")
-    setup_token = forms.CharField(label="Code d’initialisation Render", required=False,
-        widget=forms.PasswordInput(attrs={"autocomplete": "off"}))
     class Meta:
         model = User
         fields = ("username", "first_name", "last_name", "email", "password1", "password2")
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if settings.DEBUG:
-            self.fields.pop("setup_token", None)
-        else:
-            self.fields["setup_token"].required = True
         self.fields["username"].label = "Identifiant de connexion"
         self.fields["password1"].label = "Mot de passe (10 caractères minimum)"
         self.fields["password2"].label = "Confirmer le mot de passe"
@@ -49,4 +50,4 @@ class MemberForm(forms.Form):
     first_name = forms.CharField(label="Prénom", max_length=150)
     last_name = forms.CharField(label="Nom", max_length=150)
     email = forms.EmailField(label="E-mail")
-    role = forms.ChoiceField(label="Rôle", choices=[(Membership.Role.ACCOUNTANT, "Comptable"), (Membership.Role.MANAGER, "Responsable"), (Membership.Role.AUDITOR, "Auditeur")])
+    role = forms.ChoiceField(label="Rôle", choices=[(Membership.Role.OWNER, "Administrateur"), (Membership.Role.ACCOUNTANT, "Comptable"), (Membership.Role.MANAGER, "Responsable"), (Membership.Role.AUDITOR, "Auditeur")])
