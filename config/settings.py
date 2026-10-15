@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -40,7 +40,12 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 if DATABASE_URL.startswith("postgresql://") or DATABASE_URL.startswith("postgres://"):
     u = urlparse(DATABASE_URL)
-    DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": u.path.lstrip("/"), "USER": u.username or "", "PASSWORD": u.password or "", "HOST": u.hostname or "localhost", "PORT": u.port or 5432, "OPTIONS": {"connect_timeout": 5}}}
+    db_options = {"connect_timeout": 5}
+    query_options = parse_qs(u.query)
+    for option in ("sslmode", "channel_binding"):
+        if query_options.get(option):
+            db_options[option] = query_options[option][-1]
+    DATABASES = {"default": {"ENGINE": "django.db.backends.postgresql", "NAME": unquote(u.path.lstrip("/")), "USER": unquote(u.username or ""), "PASSWORD": unquote(u.password or ""), "HOST": u.hostname or "localhost", "PORT": u.port or 5432, "OPTIONS": db_options}}
 else:
     DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3", "OPTIONS": {"timeout": 20}}}
 AUTH_PASSWORD_VALIDATORS = [
