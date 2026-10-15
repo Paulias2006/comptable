@@ -19,7 +19,8 @@ def load_env():
 load_env()
 DEBUG = os.getenv("DJANGO_DEBUG", "0") == "1"
 DJANGO_SETUP_TOKEN = os.getenv("DJANGO_SETUP_TOKEN", "").strip()
-PLATFORM_ADMIN_SETUP_TOKEN = os.getenv("PLATFORM_ADMIN_SETUP_TOKEN", "").strip()
+PLATFORM_ADMIN_SETUP_TOKEN = (os.getenv("PLATFORM_ADMIN_SETUP_TOKEN", "").strip()
+    or os.getenv("DJANGO_SETUP_TOKEN", "").strip())
 render_hostname = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
 if render_hostname and DEBUG:
     raise ImproperlyConfigured("DJANGO_DEBUG doit rester à 0 sur Render.")
