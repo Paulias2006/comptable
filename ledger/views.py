@@ -268,7 +268,7 @@ def platform_admin_setup(request):
         password = request.POST.get("password", "")
         password_confirm = request.POST.get("password_confirm", "")
         if not secrets.compare_digest(token, settings.PLATFORM_ADMIN_SETUP_TOKEN):
-            messages.error(request, "Jeton invalide. Recopie la valeur actuelle de PLATFORM_ADMIN_SETUP_TOKEN depuis Render.")
+            messages.error(request, "Jeton invalide. Vérifie la valeur du jeton d’initialisation temporaire dans Render.")
         elif not email or "@" not in email or password != password_confirm:
             messages.error(request, "Vérifie l’adresse e-mail et la confirmation du mot de passe.")
         else:
@@ -304,7 +304,7 @@ def platform_admin_setup(request):
                 state.claimed_at = timezone.now()
                 state.save(update_fields=["claimed", "claimed_at"])
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-            messages.success(request, "Le compte administrateur global est créé. Supprime maintenant PLATFORM_ADMIN_SETUP_TOKEN dans Render.")
+            messages.success(request, "Le compte administrateur global est créé. Supprime maintenant le jeton temporaire utilisé dans Render.")
             return redirect("platform_admin")
     return render(request, "ledger/platform_admin_setup.html")
 
