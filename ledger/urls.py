@@ -5,6 +5,7 @@ urlpatterns = [
     path("", views.dashboard, name="dashboard"),
     path("espace-administrateur/", views.admin_workspace, name="admin_workspace"),
     path("premiere-installation/", views.setup, name="setup"),
+    path("inscription/", views.signup, name="signup"),
     path("connexion/", views.login_view, name="login"),
     path("deconnexion/", views.logout_view, name="logout"),
     path("entreprise/changer/", views.switch_company, name="switch_company"),

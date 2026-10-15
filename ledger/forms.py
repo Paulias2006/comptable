@@ -32,6 +32,12 @@ class OwnerRegistrationForm(UserCreationForm):
         self.fields["password1"].label = "Mot de passe (10 caractères minimum)"
         self.fields["password2"].label = "Confirmer le mot de passe"
 
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip().lower()
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError("Cette adresse e-mail est déjà utilisée. Connecte-toi ou demande à un administrateur de t’ajouter à une entreprise.")
+        return email
+
 class AccountForm(forms.ModelForm):
     class Meta:
         model = Account

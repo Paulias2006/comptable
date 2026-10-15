@@ -86,8 +86,6 @@ def setup(request):
 def login_view(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
-    if not Membership.objects.exists():
-        return render(request, "ledger/uninitialized.html", status=503)
     from django.contrib.auth import authenticate
     if request.method == "POST":
         form = LoginForm(request, data=request.POST)
@@ -104,6 +102,35 @@ def login_view(request):
     else:
         form = LoginForm(request)
     return render(request, "ledger/login.html", {"form": form})
+
+def signup(request):
+    if request.user.is_authenticated:
+        return redirect("dashboard")
+    if request.method == "POST":
+        form = OwnerRegistrationForm(request.POST)
+        if form.is_valid():
+            try:
+                with transaction.atomic():
+                    user = form.save(commit=False)
+                    user.first_name = form.cleaned_data["first_name"]
+                    user.last_name = form.cleaned_data["last_name"]
+                    user.email = form.cleaned_data["email"]
+                    user.save()
+                    create_company_for_owner(
+                        user=user,
+                        name=form.cleaned_data["company_name"],
+                        tax_id=form.cleaned_data["tax_id"],
+                        country=form.cleaned_data["country"],
+                    )
+            except IntegrityError:
+                form.add_error(None, "Ce compte vient d’être créé ou l’identifiant est déjà utilisé. Vérifie les champs et connecte-toi si tu as déjà un compte.")
+            else:
+                login(request, user, backend="django.contrib.auth.backends.ModelBackend")
+                messages.success(request, "Ton espace comptable est prêt. Tu es administrateur de cette entreprise.")
+                return redirect("dashboard")
+    else:
+        form = OwnerRegistrationForm()
+    return render(request, "ledger/signup.html", {"form": form})
 
 @login_required
 @require_POST
