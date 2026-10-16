@@ -83,7 +83,16 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_ROOT = Path(os.getenv("PRIVATE_MEDIA_ROOT", BASE_DIR / "private_media"))
 MEDIA_URL = "/private-media/"  # Never served directly; downloads pass through permission checks.
 cloudinary_url = os.getenv("CLOUDINARY_URL", "").strip()
-if cloudinary_url:
+split_cloudinary_values = {
+    "cloud_name": os.getenv("CLOUDINARY_CLOUD_NAME", "").strip(),
+    "api_key": os.getenv("CLOUDINARY_API_KEY", "").strip(),
+    "api_secret": os.getenv("CLOUDINARY_API_SECRET", "").strip(),
+}
+if all(split_cloudinary_values.values()):
+    # Prefer a complete current key pair when both formats exist. This avoids
+    # silently continuing to use an old CLOUDINARY_URL left in the host.
+    cloudinary_values = split_cloudinary_values
+elif cloudinary_url:
     parsed_cloudinary_url = urlparse(cloudinary_url)
     if parsed_cloudinary_url.scheme != "cloudinary" or not all(
         (parsed_cloudinary_url.hostname, parsed_cloudinary_url.username, parsed_cloudinary_url.password)
@@ -95,11 +104,7 @@ if cloudinary_url:
         "api_secret": unquote(parsed_cloudinary_url.password),
     }
 else:
-    cloudinary_values = {
-        "cloud_name": os.getenv("CLOUDINARY_CLOUD_NAME", "").strip(),
-        "api_key": os.getenv("CLOUDINARY_API_KEY", "").strip(),
-        "api_secret": os.getenv("CLOUDINARY_API_SECRET", "").strip(),
-    }
+    cloudinary_values = split_cloudinary_values
 CLOUDINARY_CONFIGURED = all(cloudinary_values.values())
 if not DEBUG and not CLOUDINARY_CONFIGURED:
     raise ImproperlyConfigured("Cloudinary doit être configuré en production pour conserver les pièces jointes.")

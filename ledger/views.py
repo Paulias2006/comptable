@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import secrets
 from datetime import date
@@ -33,10 +34,11 @@ from ledger.permissions import can_manage, can_post, require_company, roles
 from ledger.reports import account_balances
 from ledger.services.accounting import approve_entry, create_company_for_owner, post_entry, reject_entry, reverse_entry, update_pending_entry, validate_upload
 
+logger = logging.getLogger(__name__)
+
 def cloudinary_upload_error_message(exc):
-    if "cloud_name mismatch" in str(exc).lower():
-        return "Cloudinary refuse cette configuration : le nom du cloud, la clé API et le secret doivent provenir du même environnement produit (Console > Settings > API Keys)."
-    return "Cloudinary a refusé la pièce. Vérifie les identifiants du même environnement produit, puis réessaie."
+    logger.warning("Document upload failed (%s)", type(exc).__name__)
+    return "La pièce n’a pas pu être envoyée. Vérifie le fichier ou réessaie dans un instant."
 
 def setup(request):
     # Local development remains convenient. In production the setup endpoint is
@@ -95,6 +97,7 @@ def login_view(request):
                 form.add_error(None, "Aucun accès actif à une entreprise. Contacte son administrateur.")
             else:
                 login(request, user)
+                request.session.set_expiry(60 * 60 * 24 * 30 if request.POST.get("remember_me") else 0)
                 target = request.GET.get("next", "")
                 if target and url_has_allowed_host_and_scheme(target, allowed_hosts={request.get_host()}, require_https=request.is_secure()):
                     return redirect(target)
@@ -390,8 +393,9 @@ def entry_new(request):
             messages.error(request, "; ".join(exc.messages) if isinstance(exc, ValidationError) else "Vérifie la date et les lignes de l’écriture.")
         except CloudinaryError as exc:
             messages.error(request, cloudinary_upload_error_message(exc) + " L’écriture n’a pas été enregistrée.")
-        except requests.RequestException:
-            messages.error(request, "Cloudinary est momentanément inaccessible. L’écriture n’a pas été enregistrée ; réessaie sans pièce ou plus tard.")
+        except (requests.RequestException, OSError) as exc:
+            logger.warning("Document upload failed (%s)", type(exc).__name__)
+            messages.error(request, "Le justificatif n’a pas pu être envoyé. L’écriture n’a pas été enregistrée ; vérifie ta connexion puis réessaie.")
     return render(request, "ledger/entry_form.html", {"accounts": accounts, "today": entry_date,
         "initial_lines": initial_lines, "reference": reference, "selected_journal": selected_journal, "description": description})
 
@@ -430,8 +434,9 @@ def entry_edit(request, pk):
             messages.error(request, "; ".join(exc.messages) if isinstance(exc, ValidationError) else "Vérifie la date et les lignes de l’écriture.")
         except CloudinaryError as exc:
             messages.error(request, cloudinary_upload_error_message(exc) + " L’écriture n’a pas été modifiée.")
-        except requests.RequestException:
-            messages.error(request, "Le stockage des pièces est momentanément inaccessible. L’écriture n’a pas été modifiée.")
+        except (requests.RequestException, OSError) as exc:
+            logger.warning("Document upload failed (%s)", type(exc).__name__)
+            messages.error(request, "Le justificatif n’a pas pu être envoyé. L’écriture n’a pas été modifiée ; vérifie ta connexion puis réessaie.")
     return render(request, "ledger/entry_form.html", {"entry": entry, "accounts": accounts,
         "today": entry_date, "initial_lines": initial_lines, "reference": reference,
         "selected_journal": selected_journal, "description": description})
@@ -485,9 +490,18 @@ def documents(request):
 def _document_response(request, pk, *, inline):
     doc = get_object_or_404(SupportingDocument.objects.select_related("entry"), pk=pk, entry__company__memberships__user=request.user, entry__company__memberships__active=True)
     try:
-        handle = doc.file.open("rb")
-    except (FileNotFoundError, OSError):
-        raise Http404("Le fichier archivé est introuvable.")
+        storage = doc.file.storage
+        if hasattr(storage, "open_stream"):
+            handle = storage.open_stream(doc.file.name)
+        else:
+            handle = doc.file.open("rb")
+    except FileNotFoundError:
+        messages.error(request, "Cette pièce n’est plus disponible. Contacte l’administrateur de l’entreprise.")
+        return redirect("entry_detail", pk=doc.entry_id)
+    except (CloudinaryError, requests.RequestException, OSError) as exc:
+        logger.warning("Document download failed (%s)", type(exc).__name__)
+        messages.error(request, "Le téléchargement de cette pièce a échoué. Vérifie ta connexion puis réessaie.")
+        return redirect("entry_detail", pk=doc.entry_id)
     filename = Path(doc.original_name).name
     action = "document.viewed" if inline else "document.downloaded"
     AuditEvent.objects.create(company=doc.entry.company, actor=request.user, action=action, object_type="SupportingDocument", object_id=str(doc.pk), details={"entry": doc.entry.number})
@@ -539,7 +553,7 @@ def document_add(request, pk):
                     messages.error(request, cloudinary_upload_error_message(exc))
                     continue
                 except (requests.RequestException, OSError):
-                    messages.error(request, "Cloudinary est momentanément inaccessible. Vérifie la connexion Internet, puis réessaie.")
+                    messages.error(request, "Le justificatif n’a pas pu être envoyé. Vérifie ta connexion puis réessaie.")
                     continue
                 AuditEvent.objects.create(company=request.company, actor=request.user, action="document.added", object_type="SupportingDocument", details={"entry": entry.number, "sha256": digest})
                 saved += 1
@@ -886,8 +900,8 @@ def export(request):
         if kind == "zip":
             return export_zip(request.company)
         return export_xlsx(request.company)
-    except (OSError, RuntimeError) as exc:
-        messages.error(request, f"Export impossible : {exc}")
+    except (OSError, RuntimeError):
+        messages.error(request, "Le fichier demandé n’a pas pu être préparé. Réessaie dans un instant.")
         return redirect("export")
 
 @login_required
@@ -901,6 +915,6 @@ def backup(request):
         request.company.save(update_fields=["last_backup_at"])
         AuditEvent.objects.create(company=request.company, actor=request.user, action="backup.created", object_type="Company", object_id=str(request.company.pk), details={"file": path.name})
         return FileResponse(open(path, "rb"), as_attachment=True, filename=path.name)
-    except (OSError, RuntimeError, ValueError) as exc:
-        messages.error(request, f"Sauvegarde impossible : {exc}")
+    except (OSError, RuntimeError, ValueError):
+        messages.error(request, "La sauvegarde n’a pas pu être préparée. Réessaie dans un instant.")
         return redirect("dashboard")

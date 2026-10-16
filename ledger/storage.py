@@ -18,6 +18,18 @@ class CloudinaryPrivateStorage(Storage):
     resource_type = "image"  # Cloudinary treats PDFs and images as image assets.
     delivery_type = "authenticated"
 
+    class _RemoteFile:
+        def __init__(self, response):
+            self.response = response
+            self.stream = response.raw
+            self.stream.decode_content = True
+
+        def read(self, size=-1):
+            return self.stream.read(size)
+
+        def close(self):
+            self.response.close()
+
     def _save(self, name, content):
         original_path = PurePosixPath(name)
         extension = original_path.suffix.lower().lstrip(".")
@@ -34,7 +46,7 @@ class CloudinaryPrivateStorage(Storage):
         )
         return f"{result['public_id']}.{result.get('format') or extension}"
 
-    def _open(self, name, mode="rb"):
+    def open_stream(self, name):
         path = PurePosixPath(name)
         public_id = str(path.with_suffix(""))
         file_format = path.suffix.lstrip(".")
@@ -47,11 +59,23 @@ class CloudinaryPrivateStorage(Storage):
             type=self.delivery_type,
             expires_at=int(time()) + 120,
         )
-        response = requests.get(signed_url, timeout=(10, 120))
+        response = requests.get(signed_url, timeout=(10, 120), stream=True)
         if response.status_code == 404:
+            response.close()
             raise FileNotFoundError(name)
-        response.raise_for_status()
-        return ContentFile(response.content, name=name)
+        try:
+            response.raise_for_status()
+        except requests.RequestException:
+            response.close()
+            raise
+        return self._RemoteFile(response)
+
+    def _open(self, name, mode="rb"):
+        remote = self.open_stream(name)
+        try:
+            return ContentFile(remote.read(), name=name)
+        finally:
+            remote.close()
 
     def delete(self, name):
         path = PurePosixPath(name)
