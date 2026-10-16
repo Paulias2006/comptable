@@ -56,7 +56,7 @@ def setup(request):
         supplied_token = request.POST.get("setup_token", "")
         token_valid = settings.DEBUG or secrets.compare_digest(supplied_token, settings.DJANGO_SETUP_TOKEN)
         if not token_valid:
-            token_error = "Jeton d’initialisation invalide. Copie-le depuis les variables Render."
+            token_error = "Le code temporaire est incorrect. Vérifie les informations reçues pour l’ouverture de cet espace."
         form = OwnerRegistrationForm(request.POST)
         if token_valid and form.is_valid():
             with transaction.atomic():
@@ -79,7 +79,7 @@ def setup(request):
             # explicit backend here. Keep login outside the DB transaction so
             # a session error cannot roll back the newly created company.
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-            messages.success(request, "Votre espace comptable est prêt. Pour verrouiller aussi l’initialisation, supprimez DJANGO_SETUP_TOKEN dans Render.")
+            messages.success(request, "Votre espace comptable est prêt. L’ouverture initiale ne peut être utilisée qu’une seule fois.")
             return redirect("dashboard")
     else:
         form = OwnerRegistrationForm()
@@ -271,7 +271,7 @@ def platform_admin_setup(request):
         password = request.POST.get("password", "")
         password_confirm = request.POST.get("password_confirm", "")
         if not secrets.compare_digest(token, settings.PLATFORM_ADMIN_SETUP_TOKEN):
-            messages.error(request, "Jeton invalide. Vérifie la valeur du jeton d’initialisation temporaire dans Render.")
+            messages.error(request, "Le code temporaire est incorrect. Vérifie les informations reçues pour l’ouverture de cet espace.")
         elif not email or "@" not in email or password != password_confirm:
             messages.error(request, "Vérifie l’adresse e-mail et la confirmation du mot de passe.")
         else:
@@ -307,7 +307,7 @@ def platform_admin_setup(request):
                 state.claimed_at = timezone.now()
                 state.save(update_fields=["claimed", "claimed_at"])
             login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-            messages.success(request, "Le compte administrateur global est créé. Supprime maintenant le jeton temporaire utilisé dans Render.")
+            messages.success(request, "Le compte administrateur global est prêt. Tu peux maintenant gérer les espaces et les accès.")
             return redirect("platform_admin")
     return render(request, "ledger/platform_admin_setup.html")
 

@@ -175,6 +175,39 @@ class ReconciliationMatch(models.Model):
 
 
 class AuditEvent(models.Model):
+    ACTION_LABELS = {
+        "company.created": "Entreprise créée",
+        "entry.posted": "Écriture comptabilisée",
+        "entry.approved": "Écriture validée",
+        "entry.rejected": "Écriture rejetée",
+        "entry.reversed": "Écriture corrigée",
+        "entry.updated": "Écriture modifiée",
+        "chart.syscohada.imported": "Plan comptable ajouté",
+        "account.created": "Compte ajouté",
+        "backup.created": "Sauvegarde créée",
+        "bank.reconciliation.updated": "Rapprochement bancaire mis à jour",
+        "company.updated": "Fiche entreprise modifiée",
+        "document.added": "Pièce jointe ajoutée",
+        "document.viewed": "Pièce jointe consultée",
+        "document.downloaded": "Pièce jointe téléchargée",
+        "fiscal_period.closed": "Exercice clôturé",
+        "fiscal_period.created": "Exercice créé",
+        "member.added": "Accès utilisateur ajouté",
+        "member.disabled": "Accès utilisateur suspendu",
+        "member.enabled": "Accès utilisateur rétabli",
+        "member.password_reset": "Mot de passe réinitialisé",
+        "member.role_changed": "Rôle utilisateur modifié",
+    }
+    OBJECT_LABELS = {
+        "Company": "Entreprise",
+        "JournalEntry": "Écriture",
+        "SupportingDocument": "Pièce jointe",
+        "Account": "Compte comptable",
+        "BankReconciliation": "Rapprochement bancaire",
+        "FiscalPeriod": "Exercice comptable",
+        "User": "Utilisateur",
+    }
+
     company = models.ForeignKey(Company, on_delete=models.PROTECT, related_name="audit_events")
     actor = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
     action = models.CharField(max_length=80)
@@ -182,5 +215,14 @@ class AuditEvent(models.Model):
     object_id = models.CharField(max_length=80, blank=True)
     details = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def action_label(self):
+        return self.ACTION_LABELS.get(self.action, "Action effectuée")
+
+    @property
+    def object_label(self):
+        return self.OBJECT_LABELS.get(self.object_type, "Espace comptable")
+
     class Meta:
         ordering = ["-created_at"]
