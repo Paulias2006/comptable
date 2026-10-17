@@ -190,10 +190,23 @@ def admin_workspace(request):
     })
 
 
-@login_required
-def platform_admin(request):
+def _platform_admin_allowed(request):
     if not request.user.is_superuser:
         messages.error(request, "Cette page est réservée à l’administration globale de la plateforme.")
+        return False
+    return True
+
+
+def _platform_admin_return(request):
+    destination = request.POST.get("return_to", "platform_admin")
+    if destination not in {"platform_admin", "platform_admin_clients", "platform_admin_team"}:
+        destination = "platform_admin"
+    return redirect(destination)
+
+
+@login_required
+def platform_admin(request):
+    if not _platform_admin_allowed(request):
         return redirect("dashboard")
     if request.method == "POST":
         action = request.POST.get("action")
@@ -210,25 +223,30 @@ def platform_admin(request):
                 messages.error(request, "Plusieurs comptes utilisent déjà cette adresse. Corrige les comptes avant de continuer.")
             else:
                 target = matches.first()
-                if target is None:
+                is_new_user = target is None
+                if is_new_user:
                     username = email
                     if User.objects.filter(username=username).exists():
                         username = f"{email.split('@', 1)[0]}-{secrets.token_hex(4)}"
                     target = User(username=username, email=email, first_name=first_name, last_name=last_name)
-                try:
-                    validate_password(password, target)
-                except ValidationError as exc:
-                    messages.error(request, " ".join(exc.messages))
-                else:
-                    target.email = email
-                    target.first_name = first_name or target.first_name
-                    target.last_name = last_name or target.last_name
-                    target.is_staff = True
-                    target.is_superuser = True
+                if is_new_user:
+                    try:
+                        validate_password(password, target)
+                    except ValidationError as exc:
+                        messages.error(request, " ".join(exc.messages))
+                        return _platform_admin_return(request)
+                target.email = email
+                target.first_name = first_name or target.first_name
+                target.last_name = last_name or target.last_name
+                target.is_staff = True
+                target.is_superuser = True
+                if is_new_user:
                     target.set_password(password)
-                    target.save()
-                    messages.success(request, f"L’administrateur global {email} est prêt. Il pourra se connecter avec son adresse e-mail.")
-                    return redirect("platform_admin")
+                target.save()
+                if is_new_user:
+                    messages.success(request, f"L’administrateur global {email} est créé. Il pourra se connecter avec son adresse e-mail.")
+                else:
+                    messages.success(request, f"L’administrateur global {email} a été ajouté. Son mot de passe existant n’a pas été modifié.")
         elif action == "remove_admin":
             target = get_object_or_404(User, pk=request.POST.get("user_id"), is_superuser=True)
             if target.pk == request.user.pk:
@@ -240,7 +258,7 @@ def platform_admin(request):
                 target.is_staff = False
                 target.save(update_fields=["is_superuser", "is_staff"])
                 messages.success(request, f"L’accès global de {target.email or target.username} a été retiré.")
-                return redirect("platform_admin")
+                return _platform_admin_return(request)
         elif action in {"reset_user_password", "toggle_user_access"}:
             target = get_object_or_404(User.objects.filter(is_superuser=False, company_memberships__isnull=False).distinct(), pk=request.POST.get("user_id"))
             memberships = target.company_memberships.select_related("company").all()
@@ -268,28 +286,146 @@ def platform_admin(request):
                     AuditEvent.objects.create(company=membership.company, actor=request.user,
                         action="member.enabled" if target.is_active else "member.disabled", object_type="User", object_id=str(target.pk))
                 messages.success(request, f"L’accès de {target.email or target.username} a été {'rétabli' if target.is_active else 'suspendu'} dans toutes ses entreprises.")
-            return redirect("platform_admin")
-    query = request.GET.get("q", "").strip()
-    client_users = User.objects.filter(company_memberships__isnull=False, is_superuser=False).distinct()
-    if query:
-        client_users = client_users.filter(Q(email__icontains=query) | Q(username__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query) | Q(company_memberships__company__name__icontains=query)).distinct()
-    client_users = client_users.annotate(
-        company_count=Count("company_memberships", filter=Q(company_memberships__active=True), distinct=True),
-    ).prefetch_related("company_memberships__company").order_by("email", "username")
-    client_page = Paginator(client_users, 30).get_page(request.GET.get("page"))
+            return _platform_admin_return(request)
+        return _platform_admin_return(request)
     companies = Company.objects.annotate(
         member_count=Count("memberships", filter=Q(memberships__active=True), distinct=True),
         entry_count=Count("entries", distinct=True),
-    ).order_by("name")
+        document_count=Count("entries__documents", distinct=True),
+    ).order_by("-created_at")
+    total_entries = JournalEntry.objects.count()
+    recent_events = AuditEvent.objects.select_related("company", "actor")[:12]
     response = render(request, "ledger/platform_admin.html", {
-        "companies": companies,
-        "platform_admins": User.objects.filter(is_superuser=True).order_by("email", "username"),
-        "client_users": client_page,
-        "client_query": query,
+        "companies": companies[:8],
+        "recent_events": recent_events,
         "user_count": User.objects.count(),
+        "client_count": User.objects.filter(company_memberships__isnull=False, is_superuser=False).distinct().count(),
         "company_count": Company.objects.count(),
-        "entry_count": JournalEntry.objects.count(),
+        "entry_count": total_entries,
+        "document_count": SupportingDocument.objects.count(),
+        "pending_count": JournalEntry.objects.filter(state=JournalEntry.State.PENDING).count(),
+        "posted_count": JournalEntry.objects.filter(state=JournalEntry.State.POSTED).count(),
     })
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def platform_admin_companies(request):
+    if not _platform_admin_allowed(request):
+        return redirect("dashboard")
+    query = request.GET.get("q", "").strip()
+    companies = Company.objects.annotate(
+        member_count=Count("memberships", filter=Q(memberships__active=True), distinct=True),
+        entry_count=Count("entries", distinct=True),
+        document_count=Count("entries__documents", distinct=True),
+    )
+    if query:
+        companies = companies.filter(
+            Q(name__icontains=query) | Q(tax_id__icontains=query) | Q(country__icontains=query)
+            | Q(memberships__user__email__icontains=query) | Q(memberships__user__first_name__icontains=query)
+            | Q(memberships__user__last_name__icontains=query)
+        ).distinct()
+    companies = companies.order_by("name")
+    response = render(request, "ledger/platform_admin_companies.html", {
+        "companies": Paginator(companies, 25).get_page(request.GET.get("page")), "query": query,
+    })
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def platform_admin_company_detail(request, pk):
+    if not _platform_admin_allowed(request):
+        return redirect("dashboard")
+    company = get_object_or_404(Company, pk=pk)
+    form = CompanyForm(request.POST or None, instance=company)
+    if request.method == "POST":
+        if form.is_valid():
+            form.save()
+            AuditEvent.objects.create(company=company, actor=request.user, action="company.updated",
+                object_type="Company", object_id=str(company.pk), details={"source": "platform_admin"})
+            messages.success(request, "La fiche de l’entreprise a été mise à jour.")
+            return redirect("platform_admin_company_detail", pk=company.pk)
+        messages.error(request, "Vérifie les informations de l’entreprise.")
+    members = Membership.objects.filter(company=company).select_related("user").order_by("user__email")
+    events = AuditEvent.objects.filter(company=company).select_related("actor")[:15]
+    recent_entries = JournalEntry.objects.filter(company=company).annotate(
+        total_debit=Sum("lines__debit"), total_credit=Sum("lines__credit"),
+        document_count=Count("documents", distinct=True),
+    ).order_by("-date", "-number")[:12]
+    response = render(request, "ledger/platform_admin_company_detail.html", {
+        "company": company, "form": form, "members": members, "events": events,
+        "entry_count": JournalEntry.objects.filter(company=company).count(),
+        "pending_count": JournalEntry.objects.filter(company=company, state=JournalEntry.State.PENDING).count(),
+        "posted_count": JournalEntry.objects.filter(company=company, state=JournalEntry.State.POSTED).count(),
+        "rejected_count": JournalEntry.objects.filter(company=company, state=JournalEntry.State.REJECTED).count(),
+        "document_count": SupportingDocument.objects.filter(entry__company=company).count(),
+        "account_count": Account.objects.filter(company=company).count(),
+        "periods": FiscalPeriod.objects.filter(company=company).order_by("-start_date")[:8],
+        "recent_entries": recent_entries,
+    })
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def platform_admin_clients(request):
+    if not _platform_admin_allowed(request):
+        return redirect("dashboard")
+    query = request.GET.get("q", "").strip()
+    status = request.GET.get("status", "")
+    clients = User.objects.filter(company_memberships__isnull=False, is_superuser=False).distinct()
+    if query:
+        clients = clients.filter(
+            Q(email__icontains=query) | Q(username__icontains=query) | Q(first_name__icontains=query)
+            | Q(last_name__icontains=query) | Q(company_memberships__company__name__icontains=query)
+            | Q(company_memberships__company__tax_id__icontains=query)
+        ).distinct()
+    if status == "active":
+        clients = clients.filter(is_active=True, company_memberships__active=True).distinct()
+    elif status == "suspended":
+        clients = clients.filter(is_active=False)
+    clients = clients.annotate(
+        company_count=Count("company_memberships", filter=Q(company_memberships__active=True), distinct=True),
+    ).prefetch_related("company_memberships__company").order_by("email", "username")
+    response = render(request, "ledger/platform_admin_clients.html", {
+        "clients": Paginator(clients, 30).get_page(request.GET.get("page")),
+        "query": query, "status": status,
+    })
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def platform_admin_activity(request):
+    if not _platform_admin_allowed(request):
+        return redirect("dashboard")
+    query = request.GET.get("q", "").strip()
+    company_id = request.GET.get("company", "")
+    events = AuditEvent.objects.select_related("company", "actor")
+    if query:
+        events = events.filter(
+            Q(company__name__icontains=query) | Q(actor__email__icontains=query)
+            | Q(actor__username__icontains=query) | Q(action__icontains=query)
+            | Q(object_type__icontains=query) | Q(object_id__icontains=query)
+        )
+    if company_id.isdigit():
+        events = events.filter(company_id=int(company_id))
+    response = render(request, "ledger/platform_admin_activity.html", {
+        "events": Paginator(events, 50).get_page(request.GET.get("page")),
+        "companies": Company.objects.order_by("name"), "query": query, "selected_company": company_id,
+    })
+    response["Cache-Control"] = "private, no-store"
+    return response
+
+
+@login_required
+def platform_admin_team(request):
+    if not _platform_admin_allowed(request):
+        return redirect("dashboard")
+    admins = User.objects.filter(is_superuser=True).order_by("email", "username")
+    response = render(request, "ledger/platform_admin_team.html", {"admins": admins})
     response["Cache-Control"] = "private, no-store"
     return response
 
