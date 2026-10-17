@@ -32,5 +32,16 @@
     });
   });
   document.querySelectorAll('[data-menu-toggle]').forEach((button) => button.addEventListener('click', () => document.querySelector('.sidebar')?.classList.toggle('open')));
+  document.addEventListener('click', (event) => {
+    document.querySelectorAll('.company-picker[open]').forEach((picker) => {
+      if (!picker.contains(event.target)) picker.removeAttribute('open');
+    });
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') document.querySelectorAll('.company-picker[open]').forEach((picker) => {
+      picker.removeAttribute('open');
+      picker.querySelector('summary')?.focus();
+    });
+  });
   document.querySelectorAll('[data-dismiss]').forEach((item) => setTimeout(() => item.remove(), 6500));
 })();

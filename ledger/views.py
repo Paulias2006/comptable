@@ -812,11 +812,12 @@ def _reconciliation_totals(reconciliation):
         account=reconciliation.account).aggregate(debit=Sum("debit"), credit=Sum("credit"))
     outstanding = JournalLine.objects.filter(entry__company=reconciliation.company,
         entry__state=JournalEntry.State.POSTED, entry__date__lte=reconciliation.end_date,
-        account=reconciliation.account).exclude(pk__in=matched_ids).aggregate(debit=Sum("debit"), credit=Sum("credit"))
+        account=reconciliation.account).exclude(pk__in=matched_ids).aggregate(debit=Sum("debit"), credit=Sum("credit"), count=Count("pk"))
     book_balance = (book["debit"] or Decimal("0")) - (book["credit"] or Decimal("0"))
     outstanding_net = (outstanding["debit"] or Decimal("0")) - (outstanding["credit"] or Decimal("0"))
     adjusted_statement = reconciliation.statement_balance + outstanding_net
     return {"book_balance": book_balance, "outstanding_net": outstanding_net,
+        "outstanding_count": outstanding["count"] or 0,
         "adjusted_statement": adjusted_statement, "difference": book_balance - adjusted_statement}
 
 
@@ -891,13 +892,17 @@ def bank_reconciliation(request):
         if editing:
             matched_elsewhere = matched_elsewhere.exclude(reconciliation=editing)
         candidates = candidates.exclude(pk__in=matched_elsewhere.values("journal_line_id"))
-        candidates = candidates.select_related("entry").order_by("entry__date", "entry__number")[:500]
+        candidates = candidates.select_related("entry").order_by("entry__date", "entry__number")
+    prior_candidates = candidates.filter(entry__date__lt=start) if start else JournalLine.objects.none()
+    period_candidates = candidates.filter(entry__date__gte=start) if start else JournalLine.objects.none()
     reconciliations = BankReconciliation.objects.filter(company=request.company).select_related("account", "created_by")[:30]
     reports = [{"item": item, **_reconciliation_totals(item)} for item in reconciliations]
     selected_report = {"item": editing, **_reconciliation_totals(editing)} if editing else None
     selected_match_ids = set(editing.matches.values_list("journal_line_id", flat=True)) if editing else set()
     return render(request, "ledger/reconciliation.html", {"accounts": accounts, "account": account,
-        "start": start_raw, "end": end_raw, "candidates": candidates, "reports": reports, "selected_report": selected_report,
+        "start": start_raw, "end": end_raw, "period_start": start, "period_end": end,
+        "prior_candidates": prior_candidates, "period_candidates": period_candidates,
+        "candidate_count": candidates.count(), "reports": reports, "selected_report": selected_report,
         "selected_match_ids": selected_match_ids, "editing_reconciliation": editing,
         "statement_balance": request.POST.get("statement_balance", "") if request.method == "POST" else (editing.statement_balance if editing else "")})
 

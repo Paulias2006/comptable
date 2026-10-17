@@ -3,7 +3,6 @@
 <body><div class="app-shell">
 <aside class="sidebar">
  <a class="brand" href="{% url 'dashboard' %}"><span class="brand-mark">C</span>ComptaPièces</a>
- <form method="post" action="{% url 'switch_company' %}" class="field company-switcher" aria-label="Choisir l’entreprise">{% csrf_token %}<label for="company-choice">Entreprise active</label><select id="company-choice" name="company_id" onchange="this.form.requestSubmit()">{% for item in user_companies %}<option value="{{ item.company_id }}" {% if item.company_id == current_company.pk %}selected{% endif %}>{{ item.company.name }}</option>{% endfor %}</select>{% if current_membership.role == 'OWNER' %}<a href="{% url 'company_settings' %}" class="company-manage">Gérer mes entreprises</a>{% endif %}</form>
  <nav class="nav-list" aria-label="Navigation principale">
   <div class="nav-label">Espace de travail</div>
   <a class="nav-link {% if request.resolver_match.url_name == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}"><span class="nav-icon">⌂</span>Tableau de bord</a>
@@ -22,7 +21,16 @@
   {% if user.is_superuser %}<a class="nav-link" href="{% url 'platform_admin' %}"><span class="nav-icon">◆</span>Administration plateforme</a>{% endif %}
   <a class="nav-link {% if request.resolver_match.url_name == 'audit_log' %}active{% endif %}" href="{% url 'audit_log' %}"><span class="nav-icon">◉</span>Historique d’audit</a>
  </nav>
- <div class="side-bottom"><div class="side-user"><span class="avatar">{{ request.user.first_name|default:request.user.username|slice:':1'|upper }}</span><span class="user-detail"><b>{{ request.user.get_full_name|default:request.user.username }}</b><small>{{ current_membership.get_role_display }} · {{ current_company.name }}</small></span><a class="logout" href="{% url 'password_change' %}" title="Changer le mot de passe">⚿</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="logout" title="Déconnexion" aria-label="Déconnexion">↪</button></form></div></div>
+ <div class="side-bottom">
+  <details class="company-picker">
+   <summary class="side-user" aria-label="Choisir une entreprise"><span class="avatar">{{ request.user.first_name|default:request.user.username|slice:':1'|upper }}</span><span class="user-detail"><b>{{ request.user.get_full_name|default:request.user.username }}</b><small>{{ current_company.name }} · Changer d’entreprise</small></span><span class="company-chevron" aria-hidden="true">⌃</span></summary>
+   <div class="company-picker-menu"><span class="company-picker-label">Mes entreprises</span>
+    {% for item in user_companies %}<form method="post" action="{% url 'switch_company' %}">{% csrf_token %}<input type="hidden" name="company_id" value="{{ item.company_id }}"><button class="company-option{% if item.company_id == current_company.pk %} is-current{% endif %}" {% if item.company_id == current_company.pk %}aria-current="true"{% endif %}><span>{{ item.company.name }}</span><small>{{ item.get_role_display }}{% if item.company.country %} · {{ item.company.country }}{% endif %}</small>{% if item.company_id == current_company.pk %}<b aria-hidden="true">✓</b>{% endif %}</button></form>{% empty %}<span class="company-option-empty">Aucune entreprise disponible.</span>{% endfor %}
+    {% if current_membership.role == 'OWNER' %}<a href="{% url 'company_settings' %}" class="company-manage">Gérer mes entreprises <span aria-hidden="true">→</span></a>{% endif %}
+   </div>
+  </details>
+  <div class="side-user-actions"><a class="logout" href="{% url 'password_change' %}" title="Changer le mot de passe" aria-label="Changer le mot de passe">⚿</a><form method="post" action="{% url 'logout' %}">{% csrf_token %}<button class="logout" title="Déconnexion" aria-label="Déconnexion">↪</button></form></div>
+ </div>
 </aside>
 <main class="main-wrap">
  <header class="topbar"><div class="topbar-left"><button class="button menu-toggle" data-menu-toggle aria-label="Ouvrir le menu">☰</button><div><div class="crumb">{{ current_company.name }} · {{ current_company.country }}</div><h1>{% block heading %}Tableau de bord{% endblock %}</h1><p class="page-subtitle">{% block subtitle %}Votre comptabilité, claire et maîtrisée.{% endblock %}</p></div></div><div class="top-actions">{% block top_action %}{% endblock %}</div></header>
