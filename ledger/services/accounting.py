@@ -63,8 +63,7 @@ def parse_amount(value):
 
 @transaction.atomic
 def post_entry(*, company, user, date, journal, description, lines, documents=(), reverses=None, state=JournalEntry.State.POSTED, document_reference=""):
-    if not description.strip():
-        raise ValidationError("Le libellé est obligatoire.")
+    description = description.strip() or f"Écriture du {date:%d/%m/%Y}"
     period = FiscalPeriod.objects.filter(company=company, start_date__lte=date, end_date__gte=date).first()
     if not period:
         raise ValidationError("Aucun exercice ne couvre cette date. Crée d’abord l’exercice correspondant.")
@@ -112,8 +111,7 @@ def update_pending_entry(*, entry, company, user, date, journal, description, do
     entry = JournalEntry.objects.select_for_update().select_related("company").get(pk=entry.pk, company=company)
     if entry.state != JournalEntry.State.PENDING:
         raise ValidationError("Seule une écriture en attente peut être modifiée. Une écriture comptabilisée se corrige par contrepassation.")
-    if not description.strip():
-        raise ValidationError("Le libellé est obligatoire.")
+    description = description.strip() or f"Écriture du {date:%d/%m/%Y}"
     if journal not in dict(JournalEntry._meta.get_field("journal").choices):
         raise ValidationError("Le journal sélectionné est invalide.")
     period = FiscalPeriod.objects.filter(company=company, start_date__lte=date, end_date__gte=date).first()

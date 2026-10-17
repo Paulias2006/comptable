@@ -241,17 +241,57 @@ def platform_admin(request):
                 target.save(update_fields=["is_superuser", "is_staff"])
                 messages.success(request, f"L’accès global de {target.email or target.username} a été retiré.")
                 return redirect("platform_admin")
+        elif action in {"reset_user_password", "toggle_user_access"}:
+            target = get_object_or_404(User.objects.filter(is_superuser=False, company_memberships__isnull=False).distinct(), pk=request.POST.get("user_id"))
+            memberships = target.company_memberships.select_related("company").all()
+            if action == "reset_user_password":
+                password = request.POST.get("new_password", "")
+                password_confirm = request.POST.get("password_confirm", "")
+                if password != password_confirm:
+                    messages.error(request, "Les deux mots de passe ne correspondent pas.")
+                else:
+                    try:
+                        validate_password(password, target)
+                    except ValidationError as exc:
+                        messages.error(request, " ".join(exc.messages))
+                    else:
+                        target.set_password(password)
+                        target.save(update_fields=["password"])
+                        memberships.update(must_change_password=True)
+                        for membership in memberships:
+                            AuditEvent.objects.create(company=membership.company, actor=request.user, action="member.password_reset", object_type="User", object_id=str(target.pk))
+                        messages.success(request, f"Mot de passe modifié pour {target.email or target.username}. La personne devra le changer après sa prochaine connexion.")
+            else:
+                target.is_active = not target.is_active
+                target.save(update_fields=["is_active"])
+                for membership in memberships:
+                    AuditEvent.objects.create(company=membership.company, actor=request.user,
+                        action="member.enabled" if target.is_active else "member.disabled", object_type="User", object_id=str(target.pk))
+                messages.success(request, f"L’accès de {target.email or target.username} a été {'rétabli' if target.is_active else 'suspendu'} dans toutes ses entreprises.")
+            return redirect("platform_admin")
+    query = request.GET.get("q", "").strip()
+    client_users = User.objects.filter(company_memberships__isnull=False, is_superuser=False).distinct()
+    if query:
+        client_users = client_users.filter(Q(email__icontains=query) | Q(username__icontains=query) | Q(first_name__icontains=query) | Q(last_name__icontains=query) | Q(company_memberships__company__name__icontains=query)).distinct()
+    client_users = client_users.annotate(
+        company_count=Count("company_memberships", filter=Q(company_memberships__active=True), distinct=True),
+    ).prefetch_related("company_memberships__company").order_by("email", "username")
+    client_page = Paginator(client_users, 30).get_page(request.GET.get("page"))
     companies = Company.objects.annotate(
         member_count=Count("memberships", filter=Q(memberships__active=True), distinct=True),
         entry_count=Count("entries", distinct=True),
     ).order_by("name")
-    return render(request, "ledger/platform_admin.html", {
+    response = render(request, "ledger/platform_admin.html", {
         "companies": companies,
         "platform_admins": User.objects.filter(is_superuser=True).order_by("email", "username"),
+        "client_users": client_page,
+        "client_query": query,
         "user_count": User.objects.count(),
         "company_count": Company.objects.count(),
         "entry_count": JournalEntry.objects.count(),
     })
+    response["Cache-Control"] = "private, no-store"
+    return response
 
 
 def platform_admin_setup(request):
@@ -335,7 +375,6 @@ def journal(request):
     if query:
         search = (
             Q(description__icontains=query)
-            | Q(document_reference__icontains=query)
             | Q(lines__account__code__icontains=query)
             | Q(lines__account__name__icontains=query)
             | Q(lines__description__icontains=query)
@@ -379,7 +418,7 @@ def entry_new(request):
         try:
             rows = json.loads(request.POST.get("lines_json", "[]"))
             initial_lines = rows
-            reference = request.POST.get("document_reference", "")
+            reference = ""
             entry_date = request.POST.get("date", entry_date)
             selected_journal = request.POST.get("journal", "ACH")
             description = request.POST.get("description", "")
@@ -421,7 +460,8 @@ def entry_edit(request, pk):
         try:
             rows = json.loads(request.POST.get("lines_json", "[]"))
             initial_lines = rows
-            reference = request.POST.get("document_reference", "")
+            # Preserve legacy reference metadata on older pending entries; this field
+            # is no longer shown or edited in the accounting interface.
             entry_date = request.POST.get("date", entry_date)
             selected_journal = request.POST.get("journal", entry.journal)
             description = request.POST.get("description", "")

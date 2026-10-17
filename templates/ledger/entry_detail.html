@@ -11,7 +11,6 @@
       <div><small class="field-help">Date comptable</small><p><b>{{ entry.date|date:'d/m/Y' }}</b></p></div>
       <div><small class="field-help">Journal</small><p><b>{{ entry.get_journal_display }}</b></p></div>
       <div><small class="field-help">N° de pièce comptable automatique</small><p><b>E-{{ entry.number|stringformat:'06d' }}</b></p></div>
-      <div><small class="field-help">Référence facture ou reçu</small><p><b>{{ entry.document_reference|default:'—' }}</b></p></div>
       <div><small class="field-help">Saisi par</small><p><b>{{ entry.created_by.get_full_name|default:entry.created_by.username }}</b></p></div>
       <div><small class="field-help">Enregistré le</small><p><b>{{ entry.created_at|date:'d/m/Y H:i' }}</b></p></div>
     </div>

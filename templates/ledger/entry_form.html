@@ -14,9 +14,7 @@
       <div class="form-grid">
         <div class="field"><label for="date">Date comptable</label><input id="date" name="date" type="date" value="{{ today }}" required></div>
         <div class="field"><label for="journal">Journal</label><select id="journal" name="journal"><option value="ACH" {% if selected_journal == 'ACH' %}selected{% endif %}>Achats</option><option value="VEN" {% if selected_journal == 'VEN' %}selected{% endif %}>Ventes</option><option value="BNQ" {% if selected_journal == 'BNQ' %}selected{% endif %}>Banque</option><option value="CAI" {% if selected_journal == 'CAI' %}selected{% endif %}>Caisse</option><option value="OD" {% if selected_journal == 'OD' %}selected{% endif %}>Opérations diverses</option></select></div>
-        <div class="field"><label for="document-reference">Référence de la facture ou du reçu (facultatif)</label><input id="document-reference" name="document_reference" maxlength="100" value="{{ reference }}" placeholder="Ex. FAC-2026-0042"><small class="field-help">C’est le numéro imprimé par le fournisseur. Le numéro comptable E-… est généré par le logiciel.</small></div>
-        {% if entry %}<div class="field"><label>N° de pièce comptable automatique</label><input value="E-{{ entry.number|stringformat:'06d' }}" disabled></div>{% endif %}
-        <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture</label><input id="description" name="description" maxlength="240" value="{{ description }}" required placeholder="Ex. Achat de fournitures chez Togocom"></div>
+        <div class="field" style="grid-column:1/-1"><label for="description">Libellé de l’écriture (facultatif)</label><input id="description" name="description" maxlength="240" value="{{ description }}" placeholder="Ex. Achat de fournitures chez Togocom"><small class="field-help">Si tu le laisses vide, le logiciel indiquera automatiquement la date de l’écriture.</small></div>
       </div>
       <div class="line-editor">
         <div class="card-head"><h2>Lignes comptables</h2><button class="button button-small" type="button" id="add-line">＋ Ajouter une ligne</button></div>
